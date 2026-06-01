@@ -1,0 +1,281 @@
+---
+title: "01: mIF VICs statistics"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to analyse the mIF data for FAP and CNN1 staining localisation
+
+## Load packages
+
+```{r}
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_vic_mIF_statistics/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+```{r}
+data <- read.csv("../01_data/mIF_VICs_measurements_full.csv")
+colnames(data) <- c("Name", "Classification", "Area", "CNN1_Area", "FAP_Area")
+head(data)
+```
+
+```{r}
+# LMM on logit-transformed % area stained
+# Replication unit = slide (8), repeated within slide across regions (3)
+# Uses only segments that contain "Nodular Tissue"
+# Regions kept: Inner Nodule, Peri-Nodular Margin (Inner Rim + Outer Rim), Other Tissue
+
+# ---- helper: logit of a proportion with small offset and clamping
+logit_pct <- function(pct, offset_pct = 0.001) {
+  p <- (pct + offset_pct) / 100
+  p <- pmin(pmax(p, 1e-6), 1 - 1e-6)
+  qlogis(p)
+}
+
+# ---- 1) Parse IDs and identify segments that have Nodular Tissue
+data2 <- data %>%
+  dplyr::mutate(
+    slide_id   = stringr::str_extract(Name, "^[^-]+"),
+    segment_id = stringr::str_extract(Name, "^[^-]+-\\d+")
+  )
+
+segments_with_nodule <- data2 %>%
+  dplyr::filter(Classification == "Nodular Tissue") %>%
+  dplyr::pull(segment_id) %>%
+  unique()
+
+# ---- 2) Keep only those segments and define the 3 regions of interest
+df_roi <- data2 %>%
+  dplyr::filter(segment_id %in% segments_with_nodule) %>%
+  dplyr::mutate(
+    region = dplyr::case_when(
+      Classification == "Inner Nodule" ~ "Inner Nodule",
+      Classification %in% c("Inner Rim", "Outer Rim") ~ "Peri-Nodular Margin",
+      Classification == "Other Tissue" ~ "Other Tissue",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  dplyr::filter(!is.na(region)) %>%
+  dplyr::mutate(
+    slide_id = factor(slide_id),
+    region   = factor(region, levels = c("Inner Nodule", "Peri-Nodular Margin", "Other Tissue"))
+  )
+
+# ---- 3) Aggregate to slide × region and compute % stained for each marker
+slide_region <- df_roi %>%
+  dplyr::group_by(slide_id, region) %>%
+  dplyr::summarise(
+    Area_sum = sum(Area, na.rm = TRUE),
+    FAP_sum  = sum(FAP_Area, na.rm = TRUE),
+    CNN1_sum = sum(CNN1_Area, na.rm = TRUE),
+    .groups  = "drop"
+  ) %>%
+  dplyr::mutate(
+    # Safety: stained <= total
+    FAP_sum  = pmin(pmax(FAP_sum, 0), Area_sum),
+    CNN1_sum = pmin(pmax(CNN1_sum, 0), Area_sum),
+    FAP_percent  = 100 * FAP_sum  / Area_sum,
+    CNN1_percent = 100 * CNN1_sum / Area_sum
+  )
+
+# Optional quick check: do you have all regions per slide?
+# print(tidyr::pivot_wider(slide_region, names_from = region, values_from = Area_sum))
+
+# ---- 4) Long format: one row per slide × region × antibody
+df_long <- slide_region %>%
+  tidyr::pivot_longer(
+    cols      = c(FAP_percent, CNN1_percent),
+    names_to  = "antibody",
+    values_to = "pct_stained"
+  ) %>%
+  dplyr::mutate(
+    antibody = dplyr::recode(antibody, FAP_percent = "FAP", CNN1_percent = "CNN1"),
+    antibody = factor(antibody, levels = c("FAP", "CNN1")),
+    logit_y  = logit_pct(pct_stained)
+  ) %>%
+  dplyr::filter(is.finite(logit_y))
+
+# ---- 5) Fit LMM per antibody + emmeans + Holm posthoc + plot
+results_lmm <- lapply(levels(droplevels(df_long$antibody)), function(ab) {
+
+  ab_df <- df_long %>%
+    dplyr::filter(antibody == ab) %>%
+    droplevels()
+
+  # Guardrails
+  if (nrow(ab_df) == 0) {
+    return(list(error = paste0("No rows for antibody = ", ab)))
+  }
+  if (nlevels(ab_df$region) < 2) {
+    return(list(error = paste0("Need >=2 regions for antibody = ", ab),
+                region_counts = table(ab_df$region)))
+  }
+
+  # LMM: region fixed effect, slide random intercept
+  m <- lme4::lmer(logit_y ~ region + (1 | slide_id), data = ab_df, REML = FALSE)
+
+  # Omnibus test for region (Satterthwaite df) via lmerTest
+  a <- anova(m)
+
+  # EMMs + Holm-adjusted contrasts on logit scale
+  em <- emmeans::emmeans(m, ~ region)
+  pw <- pairs(em, adjust = "holm")
+
+  # Also provide EMMs back-transformed to % for interpretability
+  em_df <- as.data.frame(em)
+  em_df$pct_est <- 100 * plogis(em_df$emmean)  # inverse-logit to proportion, then %
+  # approximate CI on % scale
+  em_df$pct_lo  <- 100 * plogis(em_df$lower.CL)
+  em_df$pct_hi  <- 100 * plogis(em_df$upper.CL)
+
+  # Plot raw % by slide (spaghetti)
+  p <- ggplot2::ggplot(ab_df, ggplot2::aes(x = region, y = pct_stained, group = slide_id)) +
+    ggplot2::geom_line(alpha = 0.4) +
+    ggplot2::geom_point(size = 3) +
+    ggplot2::scale_x_discrete(drop = FALSE) +
+    ggplot2::labs(
+      title = paste("Percent area stained –", ab),
+      y     = "% stained area",
+      x     = NULL
+    ) +
+    ggplot2::theme_minimal(base_size = 13)
+
+  list(model = m, anova = a, emmeans = em, emmeans_pct = em_df, pairs = pw, plot = p, data = ab_df)
+})
+
+names(results_lmm) <- levels(droplevels(df_long$antibody))
+
+# ---- 6) Inspect results
+results_lmm$FAP$anova
+results_lmm$FAP$pairs
+results_lmm$FAP$emmeans_pct
+results_lmm$FAP$plot
+
+results_lmm$CNN1$anova
+results_lmm$CNN1$pairs
+results_lmm$CNN1$emmeans_pct
+results_lmm$CNN1$plot
+```
+```{r}
+slide_patient <- read.csv("../01_data/mIF_VICs_slide_patient.csv")
+```
+
+```{r}
+results_lmm$FAP$data$donor_id <- plyr::mapvalues(x = results_lmm$FAP$data$slide_id, from = slide_patient$slide, to = slide_patient$donor_id)
+results_lmm$CNN1$data$donor_id <- plyr::mapvalues(x = results_lmm$CNN1$data$slide_id, from = slide_patient$slide, to = slide_patient$donor_id)
+```
+
+```{r}
+write.csv(rbind(results_lmm$FAP$data, results_lmm$CNN1$data), file = paste0(output_path, "mIF_data.csv"), row.names = FALSE)
+```
+```{r}
+
+make_pairwise_table <- function(res, marker_name) {
+
+  # Pairwise contrasts (already Holm-adjusted if you used adjust="holm" in pairs())
+  pw <- as.data.frame(res$pairs) %>%
+    dplyr::mutate(
+      marker = marker_name,
+      p_adj  = as.numeric(p.value)  # p.value column is already adjusted in your object
+    )
+
+  # Back-transformed EMMs (% stained) + CI
+  means <- res$emmeans_pct %>%
+    dplyr::select(region, pct_est, pct_lo, pct_hi) %>%
+    dplyr::mutate(region = as.character(region))
+
+  # Split contrast safely on " - " (NOT on "-" which appears inside Peri-Nodular)
+  pw2 <- pw %>%
+    tidyr::separate(
+      contrast,
+      into = c("region_1", "region_2"),
+      sep = " - ",
+      remove = FALSE
+    ) %>%
+    dplyr::mutate(
+      region_1 = stringr::str_trim(stringr::str_remove_all(region_1, "[()]")),
+      region_2 = stringr::str_trim(stringr::str_remove_all(region_2, "[()]"))
+    )
+
+  # Join in region means for each side of the contrast
+  out <- pw2 %>%
+    dplyr::left_join(means, by = c("region_1" = "region")) %>%
+    dplyr::rename(pct1 = pct_est, pct1_lo = pct_lo, pct1_hi = pct_hi) %>%
+    dplyr::left_join(means, by = c("region_2" = "region")) %>%
+    dplyr::rename(pct2 = pct_est, pct2_lo = pct_lo, pct2_hi = pct_hi) %>%
+    # Nice rounding / formatting
+    dplyr::mutate(
+      estimate = round(estimate, 3),
+      SE       = round(SE, 3),
+      df       = round(df, 1),
+      t.ratio  = round(t.ratio, 3),
+      p_adj    = signif(p_adj, 3),
+
+      pct1     = round(pct1, 3),
+      pct1_lo  = round(pct1_lo, 3),
+      pct1_hi  = round(pct1_hi, 3),
+      pct2     = round(pct2, 3),
+      pct2_lo  = round(pct2_lo, 3),
+      pct2_hi  = round(pct2_hi, 3),
+
+      # use plain "-" to avoid CSV/Excel encoding issues
+      pct1_ci  = paste0(pct1, " (", pct1_lo, "-", pct1_hi, ")"),
+      pct2_ci  = paste0(pct2, " (", pct2_lo, "-", pct2_hi, ")")
+    ) %>%
+    dplyr::select(
+      marker, contrast,
+      estimate, SE, df, t.ratio,
+      p_adj,
+      region_1, pct1_ci,
+      region_2, pct2_ci
+    )
+
+  out
+}
+
+# ---- Example usage with your existing results_lmm object ----
+tbl_fap  <- make_pairwise_table(results_lmm$FAP,  "FAP")
+tbl_cnn1 <- make_pairwise_table(results_lmm$CNN1, "CNN1")
+
+ihc_stats_table <- dplyr::bind_rows(tbl_fap, tbl_cnn1)
+
+# View
+ihc_stats_table
+
+# --- Save as CSV
+write.csv(ihc_stats_table, paste0(output_path, "mIF_region_LMM_pairwise_with_means.csv"), row.names = FALSE)
+
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

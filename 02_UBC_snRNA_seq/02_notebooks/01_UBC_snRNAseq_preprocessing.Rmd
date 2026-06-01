@@ -1,0 +1,251 @@
+---
+title: "01: UBC snRNA-seq Preprocessing"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to perform necessary steps to load in snRNA-seq data and begin sub clustering.
+
+## Load packages
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(scDblFinder)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(scCustomize)
+library(readxl)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_UBC_snRNAseq_preprocessing/"
+if(!dir.exists(output_path)) dir.create(output_path)
+cellbender_path <- "../01_data/cellbender_output/"
+souporcell_path <- "../01_data/souporcell_output/"
+
+# Functions
+source("../../utils.R")
+```
+
+# Download and read in data
+
+## Read in sample metadata
+
+```{r}
+library_info <- as.data.frame(read_excel("../../00_study_design/library_info.xlsx"))
+
+# Build file list for all UBC CellBender outputs to download from NAS
+sample_list <- paste0(library_info$pool_id[library_info$included == "yes" & library_info$cohort == "UBC"], "/cellbender_output_filtered.h5")
+write.table(sample_list, file = paste0(output_path, "cellbender_file_list.txt"), quote = F, row.names = F, col.names = F)
+
+# Souporcell output is only generated for pooled samples (n_pool > 1);
+# single-donor captures are assigned directly without demultiplexing
+souporcell_list <- c(paste0(library_info$pool_id[library_info$included == "yes" & library_info$cohort == "UBC" & library_info$n_pool > 1], "/clusters.tsv"),paste0(library_info$pool_id[library_info$included == "yes" & library_info$cohort == "UBC" & library_info$n_pool > 1], "/cluster_genotypes.vcf"))
+write.table(souporcell_list, file = paste0(output_path, "souporcell_file_list.txt"), quote = F, row.names = F, col.names = F)
+```
+
+```{bash}
+# Retrieve cellbender/souporcell output from NAS
+source ~/.bashrc
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/01_UBC_snRNAseq_preprocessing/cellbender_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/03-CellBender/ \
+  ../01_data/cellbender_output
+
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/01_UBC_snRNAseq_preprocessing/souporcell_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/04-souporcell/ \
+  ../01_data/souporcell_output
+```
+
+```{r}
+# Build full paths to all downloaded inputs
+cellbender_files <- paste0(cellbender_path, 
+  library_info$pool_id[library_info$included == "yes" & 
+                       library_info$cohort == "UBC"], 
+  "/cellbender_output_filtered.h5")
+
+souporcell_files <- paste0(souporcell_path,
+  library_info$pool_id[library_info$included == "yes" & 
+                       library_info$cohort == "UBC" & 
+                       library_info$n_pool > 1],
+  "/clusters.tsv")
+
+all_input_files <- c(cellbender_files, souporcell_files)
+```
+
+```{r, eval=FALSE}
+# Run once to generate reference checksums for non-deterministic inputs
+generate_input_checksums(all_input_files, 
+                         "../01_data/input_checksums_snrnaseq.csv")
+```
+
+```{r, message=TRUE}
+validate_input_checksums(all_input_files, 
+                         "../01_data/input_checksums_snrnaseq.csv")
+```
+
+## Read in CellBender and souporcell output
+
+```{r}
+# Iterate through included snC5pV2 (single-nucleus 5' v2) samples
+obj_list <- list()
+for(i in rownames(library_info)[library_info$assay == "snC5pV2" & library_info$included == "yes" & library_info$cohort == "UBC"]){
+  # Read CellBender-corrected filtered count matrix
+  matrix <- Read_CellBender_h5_Mat(paste0(cellbender_path, library_info[i,"pool_id"], "/cellbender_output_filtered.h5"))
+  obj_list[[length(obj_list)+1]] <- CreateSeuratObject(counts = matrix, project = library_info[i,"pool_id"])
+  if(library_info[i,"n_pool"] > 1){
+    # For pooled captures, add souporcell SNP demultiplexing results to metadata
+    souporcell_output <- read.table(paste0(souporcell_path, library_info[i,"pool_id"], "/clusters.tsv"), header = T, sep = "\t", row.names = 1)
+    obj_list[[length(obj_list)]]@meta.data[rownames(souporcell_output), colnames(souporcell_output)] <- souporcell_output
+  } else{
+    # For single-donor captures, populate demux columns with placeholder values
+    obj_list[[length(obj_list)]]$status <- rep("singlet", length(colnames(obj_list[[length(obj_list)]])))
+    obj_list[[length(obj_list)]]$assignment <- rep("not_pooled", length(colnames(obj_list[[length(obj_list)]])))
+  }
+  # Store bare barcode before RenameCells prepends the pool_id prefix
+  obj_list[[length(obj_list)]]$cell_barcode <- colnames(obj_list[[length(obj_list)]])
+  obj_list[[length(obj_list)]]$pool_id <- obj_list[[length(obj_list)]]$orig.ident
+  # Prepend pool_id to cell barcodes to ensure uniqueness across pools after merging
+  obj_list[[length(obj_list)]] <- RenameCells(obj_list[[length(obj_list)]], add.cell.id = library_info[i,"pool_id"])
+}
+
+# Merge all pool objects into a single atlas; JoinLayers collapses the per-sample
+# count layers created by Seurat v5 into a single counts layer
+atlas <- merge(obj_list[[1]], c(obj_list[2:length(obj_list)]))
+atlas <- JoinLayers(atlas)
+```
+
+# QC metrics and base filtering
+
+## Add QC metrics
+
+```{r}
+atlas <- Add_Cell_QC_Metrics(object = atlas, species = "human")
+QC_Plots_Genes(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_UMIs(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_Mito(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_Complexity(seurat_object = atlas, pt.size = 0, raster = F)
+```
+
+## Interactively evaluate distribution of quality metrics
+
+```{r}
+plot_ly(x = atlas$nCount_RNA, type = "histogram")
+plot_ly(x = atlas$nFeature_RNA, type = "histogram")
+plot_ly(x = atlas$percent_mito, type = "histogram")
+plot_ly(x = atlas$percent_ribo, type = "histogram")
+plot_ly(x = atlas$log10GenesPerUMI, type = "histogram")
+```
+
+## Calculate outlier value for QC metrics
+
+```{r}
+# Calculate data-adaptive QC thresholds using the median absolute deviation (MAD) method.
+# Cells >3 MADs below the median UMI/gene count, or >3 MADs above the median
+# mitochondrial fraction, are flagged as outliers.
+attr(isOutlier(atlas$nCount_RNA, nmads = 3, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$nFeature_RNA, nmads = 3, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$percent_mito, nmads = 3, type = "higher", log = F),"thresholds")
+```
+
+## Visualise cut offs
+
+```{r}
+QC_Histogram(seurat_object = atlas, features = "nCount_RNA", low_cutoff = 360.1015)
+QC_Histogram(seurat_object = atlas, features = "nFeature_RNA", low_cutoff = 380.7693)
+QC_Histogram(seurat_object = atlas, features = "percent_mito", high_cutoff = 1) # manually set for very low calculated cut off
+```
+
+```{r}
+QC_Plot_UMIvsGene(seurat_object = atlas, low_cutoff_gene = 384.5321, low_cutoff_UMI = 360.1015, raster = F)
+QC_Plot_GenevsFeature(seurat_object = atlas, feature1 = "percent_mito", low_cutoff_gene = 380.7693, high_cutoff_feature = 1, raster = F)
+```
+
+## Remove QC outliers
+
+```{r}
+# Flag outlier cells per metric
+atlas$nCount_RNA_outlier <- isOutlier(atlas$nCount_RNA, nmads = 3, type = "lower", log = T)
+atlas$nFeature_RNA_outlier <- isOutlier(atlas$nFeature_RNA, nmads = 3, type = "lower", log = T)
+atlas$percent.mt_outlier <- atlas$percent_mito>1  # manual threshold; MAD-derived cutoff was <1%
+
+# Save unfiltered object before subsetting, to allow inspection of removed cells
+saveRDS(atlas, file = paste0(output_path, "UBCnucatlas_unprocessed.rds"))
+atlas <- subset(atlas, subset = nCount_RNA_outlier == FALSE & nFeature_RNA_outlier == FALSE & percent.mt_outlier == FALSE)
+```
+
+```{r}
+VlnPlot(atlas, features = c("nFeature_RNA", "nCount_RNA", "percent_mito"), ncol = 3, log = T, pt.size = 0, raster = F)& theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+NoLegend()
+VlnPlot(atlas, features = c("nFeature_RNA", "nCount_RNA", "percent_mito"), ncol = 3, log = F, pt.size = 0, raster = F)& theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+NoLegend()
+QC_Plot_UMIvsGene(seurat_object = atlas, raster = F)
+QC_Plot_GenevsFeature(seurat_object = atlas, feature1 = "percent_mito", raster = F)
+```
+
+```{r}
+saveRDS(atlas, file = paste0(output_path, "UBCnucatlas_preprocessed.rds"))
+```
+
+# Prepare velocyto input
+
+```{r}
+# Write per-pool filtered count matrices for velocyto input.
+# Velocyto requires 10x-formatted files (barcodes, features, matrix) and the
+# original BAM, so we stage the filtered barcodes here for use on the HPC.
+full_matrix <- atlas@assays$RNA@layers$counts
+base_path <- paste0(output_path,"velocyto_input/")
+if(!dir.exists(base_path)) dir.create(base_path)
+for(i in unique(atlas$pool_id)){
+  write10xCounts(path = paste0(base_path,i),
+                 x = full_matrix[,atlas$pool_id == i],
+                 # Strip the pool_id prefix (first 10 chars + "_") added by RenameCells
+                 # to recover the original 10x cell barcodes expected by velocyto
+                 barcodes = substring(Cells(atlas)[atlas$pool_id == i],first = 11),
+                 gene.id = rownames(atlas),
+                 version = "3", overwrite = T)
+}
+# Generate velocyto HPC submission scripts for each pool
+for(i in unique(atlas$pool_id)){
+  velocyto(pool_id = i, output_path = paste0(base_path))
+}
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_01.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_01.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

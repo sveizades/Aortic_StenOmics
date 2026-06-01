@@ -1,0 +1,184 @@
+---
+title: "12: UBC snRNA-seq VIC Velocity"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to generate the figures from the source data.
+
+## Load packages
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(extrafont)
+library(scico)
+library(Seurat)
+library(tidyverse)
+library(Seurat)
+library(slingshot)
+library(tradeSeq)
+library(CytoTRACE2) 
+library(RColorBrewer)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/12_UBC_snRNAseq_vic_velocity/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+```{r}
+vics <- readRDS("../../02_UBC_snRNA_seq/03_output/04_UBC_snRNAseq_vic_annotation/vics.rds")
+```
+
+```{r, eval=FALSE}
+#cytotrace input
+write.table(vics@assays$RNA$counts, file = paste0(output_path, "cytotrace_counts.txt"), quote = F, sep = "\t", row.names = T, col.names = T)
+write.table(vics$annotations_level2_readable, file = paste0(output_path, "cytotrace_metadata.txt"), quote = F, sep = "\t", row.names = gsub(pattern = "-", replacement = ".", x = Cells(vics)), col.names = c("annotations_level2_readable"))
+```
+
+```{bash, eval=FALSE}
+eval "$(mamba shell hook --shell bash)"
+mamba activate cytotrace2-py
+
+cd ../03_output
+cytotrace2 \
+   --input-path ../03_output/12_UBC_snRNAseq_vic_velocity/cytotrace_counts.txt \
+   --annotation-path ../03_output/12_UBC_snRNAseq_vic_velocity/cytotrace_metadata.txt \
+   --species human 
+```
+
+```{r}
+fa_coords <- read.csv("../01_data/graph_embeddings.csv", row.names = 1)
+colnames(fa_coords) <- c(1,2)
+rownames(fa_coords) <- colnames(vics)
+vics[["fa"]] <- CreateDimReducObject(as.matrix(fa_coords), key = "FA_", assay = "RNA")
+```
+
+```{r}
+DimPlot(vics, reduction = "fa", group.by = "annotations_level2_readable", cols = UBC_atlas_colours_vics)+coord_equal()
+```
+
+```{r}
+vic_sce <- as.SingleCellExperiment(vics)
+```
+
+```{r}
+set.seed(42)
+vic_sce <- slingshot(vic_sce, clusterLabels = 'annotations_level2_readable', reducedDim = 'FA')
+```
+
+```{r}
+vic_sce$slingPseudotime_1_scaled <- NA
+sP1_noNA <- vic_sce$slingPseudotime_1[!is.na(vic_sce$slingPseudotime_1)]
+vic_sce$slingPseudotime_1_scaled[!is.na(vic_sce$slingPseudotime_1)] <- (sP1_noNA - min(sP1_noNA)) / (max(sP1_noNA) - min(sP1_noNA))
+
+vic_sce$slingPseudotime_2_scaled <- NA
+sP2_noNA <- vic_sce$slingPseudotime_2[!is.na(vic_sce$slingPseudotime_2)]
+vic_sce$slingPseudotime_2_scaled[!is.na(vic_sce$slingPseudotime_2)] <- (sP2_noNA - min(sP2_noNA)) / (max(sP2_noNA) - min(sP2_noNA))
+```
+
+```{r}
+vic_sce$pseudotime <- vic_sce$slingPseudotime_1_scaled
+vic_sce$pseudotime[is.na(vic_sce$slingPseudotime_1_scaled)] <- vic_sce$slingPseudotime_2_scaled[is.na(vic_sce$slingPseudotime_1_scaled)]
+colors <- colorRampPalette(brewer.pal(11,'Spectral')[-6])(100)
+plotcol <- colors[cut(vic_sce$pseudotime, breaks=100)]
+
+plot(reducedDims(vic_sce)$FA, col = plotcol, pch=16, asp = 1)
+lines(SlingshotDataSet(vic_sce), lwd=2, col='black')
+```
+
+```{r}
+pdf(paste0(output_path,"vic_sce_slingshot.pdf"), width = 6, height = 6)
+par(mar = c(0, 0, 0, 0))  # remove margins
+plot(
+  reducedDims(vic_sce)$FA,
+  col = plotcol,
+  pch = 16,
+  asp = 1,
+  xaxt = "n",  # no x-axis
+  yaxt = "n",  # no y-axis
+  xlab = "",   # no x-axis label
+  ylab = "",   # no y-axis label
+  bty = "n"    # no box around plot
+)
+lines(SlingshotDataSet(vic_sce), lwd = 2, col = "black")
+dev.off()
+```
+```{r}
+# 1. Create raster of the points
+library(grid)
+library(png)
+
+# Save the points as a temporary raster image
+png(paste0(output_path,"vic_sce_slingshot.png"), width = 1000, height = 1000, res = 150, bg = "transparent")
+par(mar = c(0,0,0,0))  # no margins
+plot(
+  reducedDims(vic_sce)$FA,
+  col = plotcol,
+  pch = 16,
+  asp = 1,
+  xaxt = "n", yaxt = "n", xlab = "", ylab = "", bty = "n"
+)
+dev.off()
+
+# 2. Create the full vector plot and embed the rasterized points
+pdf(paste0(output_path,"vic_sce_slingshot.pdf"), width = 6, height = 6)
+plot(NA, xlim = range(reducedDims(vic_sce)$FA[,1]), 
+           ylim = range(reducedDims(vic_sce)$FA[,2]),
+     xaxt = "n", yaxt = "n", xlab = "", ylab = "", asp = 1, bty = "n")
+
+# Add the raster
+img <- readPNG(paste0(output_path,"vic_sce_slingshot.png"))
+rasterImage(img,
+            xleft = par("usr")[1], xright = par("usr")[2],
+            ybottom = par("usr")[3], ytop = par("usr")[4])
+
+# Add the lines as vector
+lines(SlingshotDataSet(vic_sce), lwd = 2, col = "black")
+dev.off()
+
+```
+
+```{r}
+saveRDS(vic_sce, file = paste0(output_path, "vics_sce_slingshot.rds"))
+saveRDS(vics, file = paste0(output_path, "vics_seurat_slingshot.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_12.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+# vics_sce_slingshot.rds will not agree
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_12.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

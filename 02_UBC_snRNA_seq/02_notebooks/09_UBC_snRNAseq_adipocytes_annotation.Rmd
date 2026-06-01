@@ -1,0 +1,119 @@
+---
+title: "09: UBC snRNA-seq Adipocyte Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the adipocyte cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/09_UBC_snRNAseq_adipocytes_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+adipocytes <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/adipocytes.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+adipocytes <- harmony_cluster(adipocytes, dims = 1:30, return.model = FALSE)
+plot_cluster_umaps(adipocytes)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify doublet/contaminating clusters
+plot_qc_by_cluster(adipocytes, "RNA_snn_res.0.3")
+```
+
+```{r}
+Idents(adipocytes) <- "RNA_snn_res.0.3"
+FAM(adipocytes, "preqc_adipocytes_0.3", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.3 cluster 1 is a mesenchymal doublet cluster.
+
+```{r}
+dim(adipocytes)
+adipocytes <- subset(adipocytes, RNA_snn_res.0.3 == "1" | known_doublet == T, invert = T)
+dim(adipocytes)
+```
+
+# Re-cluster after filtering
+
+```{r}
+adipocytes <- harmony_cluster(adipocytes, dims = 1:30)
+plot_cluster_umaps(adipocytes)
+```
+
+# Annotation
+
+```{r}
+# Assign sequential cluster labels prefixed with "adipon" using resolution 0.2
+adipocytes$annotations_level2 <- paste0("adipon", as.numeric(adipocytes$RNA_snn_res.0.2))
+adipocytes$annotations_level2 <- factor(adipocytes$annotations_level2, levels = sort(unique(adipocytes$annotations_level2)))
+DimPlot(adipocytes, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Save
+
+```{r}
+saveRDS(adipocytes, paste0(output_path, "adipocytes.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_09.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_09.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,233 @@
+---
+title: "01: SALTIRE3 Xenium Preprocessing"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to load and preprocess SALTIRE3 Xenium spatial
+transcriptomics data, perform cell-level QC filtering, integrate across donors with
+Harmony, and transfer cell-type annotations from the matched scRNA-seq atlas using
+SingleR.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(BPCells)
+library(DropletUtils)
+library(ggplot2)
+library(dplyr)
+library(plyr)
+library(dittoSeq)
+library(SingleCellExperiment)
+library(SingleR)
+library(scater)
+library(tidyverse)
+library(scico)
+library(harmony)
+library(future)
+library(readxl)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_SALTIRE3_xenium_preprocessing/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+# Load and merge Xenium data
+
+## Read in sample metadata
+
+```{r}
+sample_info <- as.data.frame(read_excel("../01_data/sample_info.xlsx"))
+obj_list <- list()
+for(i in rownames(sample_info)){
+  obj_list[[length(obj_list)+1]] <- LoadXenium(data.dir = paste0("../01_data/20251029__151959__MBSV20251027/", sample_info[i, "sample_id"]), fov = sample_info[i, "slide_id"])
+  obj_list[[length(obj_list)]]$sample_id <- sample_info[i, "subsample_id"]
+  obj_list[[length(obj_list)]]$slide_id <- sample_info[i, "slide_id"]
+  obj_list[[length(obj_list)]]$donor_id <- substring(sample_info[i, "subsample_id"], 1, 10)
+  # Load matched protein panel from the same cell feature matrix
+  obj_list[[length(obj_list)]][['Protein']] <- CreateAssayObject(Read10X_h5(paste0("../01_data/20251029__151959__MBSV20251027/", sample_info[i, "sample_id"], "/cell_feature_matrix.h5"))$`Protein Expression`)
+  obj_list[[length(obj_list)]] <- RenameCells(obj_list[[length(obj_list)]], add.cell.id = sample_info[i, "slide_id"])
+}
+```
+
+## Merge samples
+
+```{r}
+options(future.globals.maxSize = 8 * 1024^3)
+atlas <- merge(obj_list[[1]], c(obj_list[2:length(obj_list)]))
+atlas <- JoinLayers(atlas)
+```
+
+# QC filtering
+
+```{r}
+VlnPlot(atlas, features = c("nFeature_Xenium", "nCount_Xenium"), ncol = 2, pt.size = 0)
+dim(atlas)
+# Remove cells with zero transcript counts (empty segmentation masks)
+atlas <- subset(atlas, nCount_Xenium > 0)
+VlnPlot(atlas, features = c("nFeature_Xenium", "nCount_Xenium"), ncol = 2, pt.size = 0)
+dim(atlas)
+```
+
+```{r}
+saveRDS(atlas, paste0(output_path, "Xenium_prefiltering.rds"))
+```
+
+```{r}
+# Interactive histograms to inspect count/feature distributions before filtering
+plot_ly(x = atlas$nCount_Xenium, type = "histogram")
+plot_ly(x = atlas$nFeature_Xenium, type = "histogram")
+plot_ly(x = atlas$nCount_Protein, type = "histogram")
+plot_ly(x = atlas$nFeature_Protein, type = "histogram")
+plot_ly(x = atlas$nCount_BlankCodeword, type = "histogram")
+plot_ly(x = atlas$nCount_ControlProbe, type = "histogram")
+```
+
+```{r}
+dim(atlas)
+VlnPlot(atlas, features = c("nFeature_Xenium", "nCount_Xenium"), ncol = 2, pt.size = 0)
+# Apply count and feature lower thresholds
+atlas_lim <- subset(atlas, subset = nCount_Xenium < 10 | nFeature_Xenium < 5, invert = T)
+VlnPlot(atlas_lim, features = c("nFeature_Xenium", "nCount_Xenium"), ncol = 2, pt.size = 0)
+dim(atlas_lim)
+```
+
+# Normalise and identify variable features
+
+```{r}
+atlas_lim <- NormalizeData(atlas_lim)
+atlas_lim <- FindVariableFeatures(atlas_lim)
+topRNA <- head(VariableFeatures(atlas_lim), 100)
+
+# Plot variable features with and without labels
+plot1RNA <- VariableFeaturePlot(atlas_lim)
+plot2RNA <- LabelPoints(plot = plot1RNA, points = topRNA, repel = TRUE)
+plot2RNA
+```
+
+```{r}
+atlas_lim <- NormalizeData(atlas_lim, assay = "Protein")
+atlas_lim <- FindVariableFeatures(atlas_lim, assay = "Protein")
+topProtein <- head(VariableFeatures(atlas_lim, assay = "Protein"), 100)
+
+# Plot variable features with and without labels
+plot1Protein <- VariableFeaturePlot(atlas_lim, assay = "Protein")
+plot2Protein <- LabelPoints(plot = plot1Protein, points = topProtein, repel = TRUE)
+plot2Protein
+```
+
+# Normalise, integrate, and dimensionally reduce counts matrix
+
+```{r}
+# Note: harmony_cluster() uses default assay/reduction names suitable for scRNA-seq;
+# Xenium data requires Xenium-specific assay names and custom reduction keys,
+# so the integration pipeline is run inline here.
+atlas_lim <- atlas_lim %>%
+  ScaleData(assay = "Xenium") %>%
+  RunPCA(assay = "Xenium", reduction.name = "pca_rna") %>%
+  RunHarmony(group.by.vars = "donor_id", reduction.use = "pca_rna") %>%
+  RunUMAP(reduction = "harmony", dims = 1:30, reduction.name = "umap_rna") %>%
+  FindNeighbors(reduction = "harmony", dims = 1:30, graph.name = "rna_snn") %>%
+  FindClusters(resolution = c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2), graph.name = "rna_snn")
+DimPlot(atlas_lim, cols = dittoColors(), group.by = "donor_id", raster=FALSE)+coord_equal()
+DimPlot(atlas_lim, cols = dittoColors(), group.by = "sample_id", raster=FALSE)+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.02", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.04", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.06", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.08", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.1", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+DimPlot(atlas_lim, group.by = "rna_snn_res.0.2", cols = dittoColors(), raster=FALSE, reduction = "umap_rna")+coord_equal()
+```
+
+# Annotate cells using SingleR transfer from scRNA-seq atlas
+
+```{r}
+single_cell_atlas <- readRDS("../../03_SALTIRE3_scRNA_seq/03_output/10_S3_scRNAseq_annotations_combining/merged_objects.rds")
+```
+
+```{r}
+unique(single_cell_atlas$annotations_level3_readable)
+single_cell_atlas_sce <- as.SingleCellExperiment(single_cell_atlas)
+atlas_sce <- as.SingleCellExperiment(atlas_lim)
+```
+
+```{r, eval=FALSE}
+pred <- SingleR(test=atlas_sce, ref=single_cell_atlas_sce,  labels=single_cell_atlas_sce$annotations_level3_readable, de.method="wilcox", BPPARAM = BiocParallel::MulticoreParam(),
+  fine.tune = FALSE,
+  prune = FALSE)
+write.csv(pred, paste0(output_path, "pred.csv"))
+```
+
+```{r}
+pred <- read.csv(paste0(output_path, "pred.csv"))
+atlas_lim[["labels"]] <- pred$labels
+```
+
+```{r}
+DimPlot(atlas_lim, group.by = "labels", raster = F, cols = dittoColors(), label = T)+coord_equal()
+```
+
+```{r}
+# Map SingleR labels to annotation hierarchy using reference table
+annotation_reference <- read.csv("../01_data/annotation_reference.csv")
+atlas_lim$annotations_level3 <- atlas_lim$labels
+atlas_lim$annotations_level2 <- mapvalues(atlas_lim$annotations_level3, from = annotation_reference$annotations_level3, to = annotation_reference$annotations_level2)
+atlas_lim$annotations_level1 <- mapvalues(atlas_lim$annotations_level3, from = annotation_reference$annotations_level3, to = annotation_reference$annotations_level1)
+DimPlot(atlas_lim, group.by = "annotations_level3", raster = F, cols = dittoColors(), label = T)+coord_equal()
+DimPlot(atlas_lim, group.by = "annotations_level2", raster = F, cols = dittoColors(), label = T)+coord_equal()
+DimPlot(atlas_lim, group.by = "annotations_level1", raster = F, cols = dittoColors(), label = T)+coord_equal()
+```
+```{r}
+ImageDimPlot(atlas_lim, fov = "BI5XO_A1", group.by = "annotations_level2", cols = "polychrome")+coord_equal()+theme_classic()
+```
+
+```{r}
+df_annotations <- data.frame(row.names = colnames(atlas_lim), annotations_level1 = atlas_lim$annotations_level1, annotations_level2 = atlas_lim$annotations_level2, annotations_level3 = atlas_lim$annotations_level3)
+write.csv(df_annotations, file = paste0(output_path, "xenium_annotations.csv"))
+```
+
+# Save
+
+```{r}
+saveRDS(atlas_lim, paste0(output_path, "atlas_lim.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_01.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_01.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

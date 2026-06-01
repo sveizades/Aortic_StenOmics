@@ -1,0 +1,270 @@
+---
+title: "10: SALTIRE3 Annotation Combining"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to merge the individually annotated SALTIRE3 scRNA-seq cell type objects into a single atlas, reintegrate across donors, and compute a final set of dimension reductions.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(readxl)
+library(Matrix)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/10_S3_scRNAseq_annotations_combining/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+# Combine annotated objects
+
+```{r}
+obj_list <- list()
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/03_S3_scRNAseq_vic_annotation/vics.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/04_S3_scRNAseq_endothelial_annotation/endothelial.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/05_S3_scRNAseq_tnk_cells_annotation/tnk_cells.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/06_S3_scRNAseq_myeloid_annotation/myeloid.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/07_S3_scRNAseq_b_cells_annotation/b_cells.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/08_S3_scRNAseq_mast_annotation/mast.rds")
+obj_list[[length(obj_list)+1]] <- readRDS("../03_output/09_S3_scRNAseq_cycling_annotation/cycling.rds")
+
+# Annotate T and NK cells before merging
+obj_list[[3]]$annotations_level1 <- "T_cell"
+obj_list[[3]]$annotations_level1[obj_list[[3]]$annotations_level2_readable == "NK"] <- "NK_cell"
+
+merged_objects <- merge(obj_list[[1]], obj_list[-1])
+rm(obj_list)
+```
+
+```{r}
+VlnPlot(merged_objects, features = "nCount_RNA", log = T, group.by = "donor_id", pt.size = 0) + NoLegend()
+VlnPlot(merged_objects, features = "nFeature_RNA", log = T, group.by = "donor_id", pt.size = 0) + NoLegend()
+VlnPlot(merged_objects, features = "nCount_RNA", log = F, group.by = "donor_id", pt.size = 0) + NoLegend()
+VlnPlot(merged_objects, features = "nFeature_RNA", log = F, group.by = "donor_id", pt.size = 0) + NoLegend()
+VlnPlot(merged_objects, features = "percent_mito", log = F, group.by = "donor_id", pt.size = 0) + NoLegend()
+```
+
+# Reprocess combined atlas
+
+```{r}
+# Renormalise after merge; regress out IEG artefacts for the combined embedding
+merged_objects <- harmony_cluster(merged_objects, dims = 1:50, normalize = TRUE,
+                                  use_integration_features = TRUE,
+                                  vars.to.regress = "percent_ieg",
+                                  return.model = FALSE)
+plot_cluster_umaps(merged_objects)
+```
+
+```{r}
+# Preview annotations carried over from subclustering notebooks
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level2_readable", raster = F, label = T) + coord_equal() + NoLegend()
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level3_readable", raster = F, label = T) + coord_equal() + NoLegend()
+DimPlot(merged_objects, reduction = "umap", group.by = "assay", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Resolve annotation edge cases
+
+```{r}
+# Human-readable level 1 labels for plotting
+merged_objects$annotations_level1_readable <- mapvalues(
+  x    = merged_objects$annotations_level1,
+  from = c("vics", "endothelial", "T_cell", "NK_cell", "myeloid", "b_cells", "mast", "Proliferating"),
+  to   = c("Valvular interstitial cell", "Endothelial", "T cell", "NK cell",
+           "Myeloid", "B cell", "Granulocyte", "Proliferating"))
+merged_objects$annotations_level1_readable[merged_objects$annotations_level3_readable == "Neutrophil"] <- "Granulocyte"
+merged_objects$annotations_level1[merged_objects$annotations_level1 == "mast"] <- "granulocyte"
+merged_objects$annotations_level1[merged_objects$annotations_level3_readable == "Neutrophil"] <- "granulocyte"
+merged_objects$annotations_level1[merged_objects$annotations_level1_readable == "Proliferating"] <- "proliferating"
+merged_objects$annotations_level1[merged_objects$annotations_level3_readable == "TNK-cycling"] <- "proliferating"
+merged_objects$annotations_level1_readable[merged_objects$annotations_level3_readable == "TNK-cycling"] <- "Proliferating"
+merged_objects$annotations_level2_readable[merged_objects$annotations_level2_readable == "TNK-cycling"] <- "Proliferating"
+merged_objects$annotations_level3_readable[merged_objects$annotations_level3_readable == "TNK-cycling"] <- "T-cycling"
+merged_objects$annotations_level2_readable[merged_objects$annotations_level3_readable == "pDC"] <- "Dendritic cell"
+
+# Level 1
+level1_renames <- c(
+  "Endothelial"  = "Endothelial cell"
+)
+
+merged_objects$annotations_level1_readable <- ifelse(
+  merged_objects$annotations_level1_readable %in% names(level1_renames),
+  level1_renames[merged_objects$annotations_level1_readable],
+  merged_objects$annotations_level1_readable
+)
+
+# Level 2
+level2_renames <- c(
+  "Dendritic_cell" = "Dendritic cell",
+  "Plasma_cell"    = "Plasma cell",
+  "B_cell"         = "B cell",
+  "mast"           = "Mast cell"
+)
+
+merged_objects$annotations_level2_readable <- ifelse(
+  merged_objects$annotations_level2_readable %in% names(level2_renames),
+  level2_renames[merged_objects$annotations_level2_readable],
+  merged_objects$annotations_level2_readable
+)
+
+# Level 3
+level3_renames <- c(
+  "Classical_monocyte"      = "Classical monocyte",
+  "Non-classical_monocyte"  = "Non-classical monocyte",
+  "Resident_macrophage"     = "Resident macrophage",
+  "IFN-stim_macrophage"     = "IFN-stimulated macrophage",
+  "mast"                    = "Mast cell",
+  "Plasma_cell"    = "Plasma cell"
+)
+
+merged_objects$annotations_level3_readable <- ifelse(
+  merged_objects$annotations_level3_readable %in% names(level3_renames),
+  level3_renames[merged_objects$annotations_level3_readable],
+  merged_objects$annotations_level3_readable
+)
+
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level1_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level3_readable", cols = dittoColors(), raster = F) + coord_equal()
+DimPlot(merged_objects, reduction = "umap", group.by = "annotations_level2_readable", cols = dittoColors(), raster = F) + coord_equal()
+
+```
+
+```{r}
+Idents(merged_objects) <- "annotations_level1_readable"
+FAM(merged_objects, "merged_objects_annotations_level1_readable", output_path = output_path)
+```
+
+```{r}
+Idents(merged_objects) <- "annotations_level2_readable"
+FAM(merged_objects, "merged_objects_annotations_level2_readable", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(merged_objects, file = paste0(output_path, "merged_objects.rds"))
+```
+
+```{r}
+# Export as h5ad for PAGA
+merged_objects_export <- merged_objects
+merged_objects_export[["RNA"]] <- as(object = merged_objects_export[["RNA"]], Class = "Assay")
+anndataR::write_h5ad(merged_objects_export, paste0(output_path, "merged_objects.h5ad"), mode = "w")
+```
+
+# Re-embed T/NK and myeloid subsets
+
+Re-embed T/NK and myeloid cells in isolation to produce high-quality UMAP layouts for publication figures.
+
+```{r}
+tnk_cells <- subset(merged_objects, annotations_level1_readable == "T cell" | annotations_level1_readable == "NK cell")
+tnk_cells <- harmony_cluster(tnk_cells, dims = 1:30, use_integration_features = TRUE,
+                             vars.to.regress = "percent_ieg", return.model = TRUE)
+DimPlot(tnk_cells, group.by = "annotations_level2_readable", cols = dittoColors()) + coord_equal()
+DimPlot(tnk_cells, group.by = "annotations_level3_readable", cols = dittoColors()) + coord_equal()
+saveRDS(tnk_cells, file = paste0(output_path, "tnk_cells.rds"))
+```
+
+```{r}
+Idents(tnk_cells) <- "annotations_level3_readable"
+FAM(tnk_cells, "tnk_cells_annotations_level3_readable", output_path = output_path)
+```
+
+```{r}
+myeloid_cells <- subset(merged_objects, annotations_level1_readable == "Myeloid")
+myeloid_cells <- harmony_cluster(myeloid_cells, dims = 1:30, use_integration_features = TRUE,
+                                 vars.to.regress = "percent_ieg", return.model = TRUE)
+DimPlot(myeloid_cells, group.by = "annotations_level2_readable", cols = dittoColors()) + coord_equal()
+DimPlot(myeloid_cells, group.by = "annotations_level3_readable", cols = dittoColors()) + coord_equal()
+saveRDS(myeloid_cells, file = paste0(output_path, "myeloid_cells.rds"))
+```
+
+```{r}
+Idents(myeloid_cells) <- "annotations_level3_readable"
+FAM(myeloid_cells, "myeloid_cells_annotations_level3_readable", output_path = output_path)
+```
+
+```{r}
+merged_objects <- readRDS(file = paste0(output_path, "merged_objects.rds"))
+
+write.table(x = data.frame(barcode_sample = Cells(merged_objects), cell_type = merged_objects$annotations_level2_readable),file = paste0(output_path, "saltire3sc_atlas_celltypes.tsv"), quote = F, sep = '\t', row.names = F)
+# Save normalised counts
+writeMM(merged_objects@assays$RNA$data, file = paste0(output_path, "saltire3sc_atlas.mtx"))
+# save gene and cell names
+write(x = rownames(merged_objects@assays$RNA$data), file = paste0(output_path, "saltire3sc_atlas_features.tsv"))
+write(x = colnames(merged_objects@assays$RNA$data), file = paste0(output_path, "saltire3sc_atlas_barcodes.tsv"))
+```
+
+```{r}
+# Set up reticulate to use MAGIC mamba environment
+library(reticulate)
+use_condaenv("scanpy-base", required = TRUE)
+```
+
+```{python}
+import scanpy as sc
+import pandas as pd
+from scipy.io import mmread
+import anndata as ad
+
+X = mmread("../03_output/10_S3_scRNAseq_annotations_combining/saltire3sc_atlas.mtx").T.tocsr()
+
+genes = pd.read_csv("../03_output/10_S3_scRNAseq_annotations_combining/saltire3sc_atlas_features.tsv", header=None)[0].astype(str).values
+barcodes = pd.read_csv("../03_output/10_S3_scRNAseq_annotations_combining/saltire3sc_atlas_barcodes.tsv", header=None)[0].astype(str).values
+
+adata = ad.AnnData(X=X)
+adata.var_names = genes
+adata.obs_names = barcodes
+
+adata.write_h5ad("../03_output/10_S3_scRNAseq_annotations_combining/saltire3sc_atlas_counts_mtx.h5ad")
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_10.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_10.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,152 @@
+---
+title: "11: UBC snRNA-seq Annotation Combining"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to merge the individually annotated and QC-filtered cell type objects into a single atlas, reintegrate across donors, and compute a final set of dimension reductions and cluster annotations.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(tidyr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/11_UBC_snRNAseq_annotation_combining/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in annotated objects
+
+```{r}
+# Load the QC-filtered, annotated object for each cell type
+atlas_level1_initial_clusters <- c("vics", "myeloid", "tnkb_cells", "endothelial", "adipocytes", "mast", "cycling")
+atlas_level1_initial_clusters_folders <- c("04_UBC_snRNAseq_vic_annotation", "07_UBC_snRNAseq_myeloid_annotation", "06_UBC_snRNAseq_tnkb_cells_annotation",
+                                           "05_UBC_snRNAseq_endothelial_annotation", "09_UBC_snRNAseq_adipocytes_annotation",
+                                           "10_UBC_snRNAseq_mast_annotation", "08_UBC_snRNAseq_cycling_annotation")
+obj_list <- list()
+for(i in 1:length(atlas_level1_initial_clusters)){
+  obj_list[[length(obj_list) + 1]] <- readRDS(
+    paste0("../03_output/", atlas_level1_initial_clusters_folders[i], "/", atlas_level1_initial_clusters[i], ".rds")
+  )
+}
+atlas <- merge(obj_list[[1]], obj_list[-1])
+```
+
+# Reprocess combined atlas
+
+```{r}
+# Rejoin per-sample layers created on merge, then renormalise and reintegrate
+# using SelectIntegrationFeatures for consistent variable gene selection across
+# all cell types and donors
+atlas <- JoinLayers(atlas)
+atlas <- NormalizeData(atlas)
+atlas <- harmony_cluster(atlas, dims = 1:50, use_integration_features = TRUE)
+plot_cluster_umaps(atlas)
+```
+
+## Preview annotations carried over from subclustering notebooks
+
+```{r}
+DimPlot(atlas, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(atlas, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+atlas$annotations_level1_readable <- mapvalues(atlas$annotations_level1, from = c("vics", "myeloid", "B_cell", "T_cell", "NK_cell", "endothelial", "adipocytes", "mast", "proliferating"), to = c("VICs", "Myeloid", "B cells", "T cells", "NK cells", "Endothelial cells", "Adipocytes", "Mast cells", "Proliferating"))
+DimPlot(atlas, reduction = "umap", group.by = "annotations_level1_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+
+```{r}
+Idents(atlas) <- "annotations_level2"
+FAM(atlas, "atlas_annotations_level2", output_path = output_path)
+```
+
+# Aortic stenosis gene signature enrichment
+
+```{r}
+# Derive an AS gene score from bulk RNA-seq DEGs and project onto single-cell data
+bulk_DE_AS_v_noAS <- read.csv("../../01_bulk_seq/03_output/01_processing_bulkRNAseq/DE_AS_v_noAS.csv", row.names = 1)
+up_genes <- subset(bulk_DE_AS_v_noAS, padj < 0.05 & log2FoldChange > 1)$hgnc_symbol
+atlas <- AddModuleScore(atlas, features = list(up_genes = up_genes))
+FeaturePlot(atlas, features = "Cluster1", max.cutoff = "q99") +
+  scale_color_scico(palette = "vik", direction = 1, midpoint = 0,
+                    limits = c(min(FetchData(atlas, "Cluster1")),
+                               quantile(unlist(FetchData(atlas, "Cluster1")), 0.99))) +
+  coord_equal()
+```
+
+```{r}
+# Pairwise Wilcoxon test to compare AS gene score across cell types
+pw <- pairwise.wilcox.test(atlas$Cluster1, atlas$annotations_level1, p.adjust.method = "BH")
+
+pw_df <- as.data.frame(as.table(pw$p.value)) %>%
+  filter(!is.na(Freq)) %>%
+  rename(group1 = Var1, group2 = Var2, p_adj = Freq) %>%
+  mutate(p_label = case_when(
+    p_adj < 0.001 ~ "p<0.001",
+    TRUE ~ paste0("p=", signif(p_adj, 3))
+  ))
+
+write.csv(pw_df, paste0(output_path, "Supplementary_Table_CellType_Signature_Pairwise.csv"), row.names = FALSE)
+```
+
+```{r}
+Idents(atlas) <- "annotations_level1"
+FAM(atlas, "atlas_annotations_level1", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(atlas, file = paste0(output_path, "atlas.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_11.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_11.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

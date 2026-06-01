@@ -1,0 +1,124 @@
+---
+title: "10: UBC snRNA-seq Mast Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the mast cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/10_UBC_snRNAseq_mast_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+mast <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/mast.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+mast <- harmony_cluster(mast, dims = 1:30)
+plot_cluster_umaps(mast)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify doublet/contaminating clusters
+plot_qc_by_cluster(mast, "RNA_snn_res.0.3")
+```
+
+```{r}
+Idents(mast) <- "RNA_snn_res.0.3"
+FAM(mast, "preqc_mast_0.3", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.3 cluster 0 is a mesenchymal doublet cluster cluster 2 is a myeloid doublet cluster.
+
+```{r}
+dim(mast)
+mast <- subset(mast, RNA_snn_res.0.3 == 0 | RNA_snn_res.0.3 == 2 | known_doublet == T, invert = T)
+dim(mast)
+```
+
+# Re-cluster after filtering
+
+```{r}
+mast <- harmony_cluster(mast, dims = 1:30)
+plot_cluster_umaps(mast)
+```
+
+```{r}
+# Confirm QC metrics are clean after filtering
+plot_qc_by_cluster(mast, "RNA_snn_res.0.2", show_doublets = FALSE)
+```
+
+# Annotation
+
+```{r}
+# Assign sequential cluster labels prefixed with "mastn" using resolution 0.2
+mast$annotations_level2 <- paste0("mastn", as.numeric(mast$RNA_snn_res.0.2))
+mast$annotations_level2 <- factor(mast$annotations_level2, levels = sort(unique(mast$annotations_level2)))
+DimPlot(mast, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Save
+
+```{r}
+saveRDS(mast, paste0(output_path, "mast.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_10.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_10.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-13T09:13:45.015535",
+    "stage1_npy": "/Users/stefan/UoE/Dump/260204_plotting_images/F208-progressive_stage1.npy",
+    "stage1_params": "/Users/stefan/UoE/Dump/260204_plotting_images/F208-progressive_stage1_params.json",
+    "pixel_size_um": 0.2196544834974585,
+    "stage": 2
+  },
+  "parameters": {
+    "roi_bbox": [
+      6595,
+      29203,
+      69499,
+      42137
+    ],
+    "zoom_bbox": [
+      61030,
+      35367,
+      64381,
+      38718
+    ],
+    "contrast_min": 0.0,
+    "contrast_max": 201.9463087248322,
+    "scalebar_um": 2000.0,
+    "zoom_scalebar_um": 200.0,
+    "figure_width_cm": 6.3
+  }
+}

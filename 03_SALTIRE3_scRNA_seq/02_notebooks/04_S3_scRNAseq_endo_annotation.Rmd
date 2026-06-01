@@ -1,0 +1,204 @@
+---
+title: "04: SALTIRE3 scRNA-seq Endothelial Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the endothelial cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/04_S3_scRNAseq_endothelial_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+endothelial <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/endothelial.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+endothelial <- harmony_cluster(endothelial, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(endothelial)
+```
+
+```{r}
+plot_qc_by_cluster(endothelial, "RNA_snn_res.0.4")
+```
+
+```{r}
+Idents(endothelial) <- "RNA_snn_res.0.2"
+FAM(endothelial, "preqc_endothelial_0.2", output_path = output_path)
+Idents(endothelial) <- "RNA_snn_res.0.4"
+FAM(endothelial, "preqc_endothelial_0.4", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.4 clusters 3 (mesenchymal), 5 (MP), and 7 (TNK) are doublet clusters; cluster 4 is low quality.
+
+```{r}
+dim(endothelial)
+endothelial <- subset(endothelial, RNA_snn_res.0.4 %in% c("3", "5", "7", "4") | known_doublet == T, invert = T)
+dim(endothelial)
+```
+
+# Second clustering round
+
+```{r}
+endothelial <- harmony_cluster(endothelial, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(endothelial)
+```
+
+```{r}
+plot_qc_by_cluster(endothelial, "RNA_snn_res.0.4", show_doublets = FALSE)
+```
+
+```{r}
+# Interactive histograms to inspect count/feature distributions before second filter
+plot_ly(x = endothelial$nCount_RNA, type = "histogram")
+plot_ly(x = endothelial$nFeature_RNA, type = "histogram")
+```
+
+```{r}
+Idents(endothelial) <- "RNA_snn_res.0.4"
+FAM(endothelial, "preqc2_endothelial_0.4", output_path = output_path)
+```
+
+## Second QC filtering
+
+RNA_snn_res.0.4 cluster 4 is low quality; cluster 7 is a doublet cluster.
+
+```{r}
+dim(endothelial)
+endothelial <- subset(endothelial, RNA_snn_res.0.4 %in% c("4", "7"), invert = T)
+dim(endothelial)
+```
+
+# Final clustering round
+
+```{r}
+# Regress out IEG expression artefacts in the final embedding
+endothelial <- harmony_cluster(endothelial, dims = 1:30, use_integration_features = TRUE,
+                               vars.to.regress = "percent_ieg")
+plot_cluster_umaps(endothelial)
+```
+
+```{r}
+# Extend to high resolutions to help resolve rare endothelial subtypes
+endothelial <- FindClusters(endothelial, resolution = c(1, 2, 3))
+DimPlot(endothelial, reduction = "umap", group.by = "RNA_snn_res.1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(endothelial, reduction = "umap", group.by = "RNA_snn_res.2", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(endothelial, reduction = "umap", group.by = "RNA_snn_res.3", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+# Subcluster cluster 4 at res 1 to resolve the lymphatic population
+Idents(endothelial) <- "RNA_snn_res.1"
+endothelial <- FindSubCluster(endothelial, cluster = "4", graph.name = "RNA_snn", resolution = 2)
+DimPlot(endothelial, reduction = "umap", group.by = "sub.cluster", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(endothelial) <- "RNA_snn_res.0.1"
+FAM(endothelial, "endothelial_0.1", output_path = output_path)
+Idents(endothelial) <- "RNA_snn_res.0.2"
+FAM(endothelial, "endothelial_0.2", output_path = output_path)
+Idents(endothelial) <- "RNA_snn_res.0.4"
+FAM(endothelial, "endothelial_0.4", output_path = output_path)
+Idents(endothelial) <- "RNA_snn_res.1"
+FAM(endothelial, "endothelial_1", output_path = output_path)
+```
+
+# Annotation
+
+```{r}
+# Primary assignment from res 0.4; arterial cells identified at res 0.3 cluster 5;
+# lymphatics from the subcluster (1_11 = PROX1+ lymphatic endothelium)
+endothelial$annotations_level3_readable <- as.character(mapvalues(endothelial$RNA_snn_res.0.3,
+  from = sort(unique(endothelial$RNA_snn_res.0.3)),
+  to   = c("VEC-venous","VEC-venous", "VEC-endocardial", "VEC-activated", "VEC-endocardial",
+           "VEC-capillary", "VEC-arterial")))
+endothelial$annotations_level3_readable[endothelial$sub.cluster == "4_9"] <- "VEC-lymphatic"
+endothelial$annotations_level3_readable <- factor(endothelial$annotations_level3_readable,
+  levels = names(sort(table(endothelial$annotations_level3_readable), decreasing = T)))
+endothelial$annotations_level3 <- mapvalues(endothelial$annotations_level3_readable,
+  from = names(sort(table(endothelial$annotations_level3_readable), decreasing = T)),
+  to   = paste0("VECc", 1:length(unique(endothelial$annotations_level3_readable))))
+endothelial$annotations_level3 <- factor(endothelial$annotations_level3, levels = sort(unique(endothelial$annotations_level3)))
+
+endothelial$annotations_level2_readable <- "VEC-endocardial"
+endothelial$annotations_level2_readable[endothelial$annotations_level3_readable %in% c("VEC-venous", "VEC-lymphatic", "VEC-activated", "VEC-arterial", "VEC-capillary")] <- "VEC-vascular"
+endothelial$annotations_level2 <- mapvalues(endothelial$annotations_level2_readable,
+  from = names(sort(table(endothelial$annotations_level2_readable), decreasing = T)),
+  to   = paste0("VECc", 1:length(unique(endothelial$annotations_level2_readable))))
+endothelial$annotations_level2 <- factor(endothelial$annotations_level2, levels = sort(unique(endothelial$annotations_level2)))
+
+DimPlot(endothelial, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(endothelial, reduction = "umap", group.by = "annotations_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+Idents(endothelial) <- "annotations_level2_readable"
+FAM(endothelial, "endothelial_annotations_level2_readable", output_path = output_path)
+Idents(endothelial) <- "annotations_level3_readable"
+FAM(endothelial, "endothelial_annotations_level3_readable", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(object = endothelial, file = paste0(output_path, "endothelial.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_04.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_04.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,151 @@
+---
+title: "08: UBC snRNA-seq Cycling Cells Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the cycling cell cluster. Cycling cells were identified at a higher resolution in the rough annotation (res 0.06) and span multiple cell lineages, annotated here by their parent cell type.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/08_UBC_snRNAseq_cycling_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+cycling <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/cycling.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+cycling <- harmony_cluster(cycling, dims = 1:30)
+plot_cluster_umaps(cycling)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify doublet/contaminating clusters
+plot_qc_by_cluster(cycling, "RNA_snn_res.0.3")
+```
+
+```{r}
+Idents(cycling) <- "RNA_snn_res.0.3"
+FAM(cycling, "preqc_cycling_0.3", output_path = output_path)
+```
+
+## QC filtering
+
+Remove scDblFinder-predicted doublets; no additional resolution-based filtering required.
+
+```{r}
+dim(cycling)
+cycling <- subset(cycling, known_doublet == F)
+dim(cycling)
+```
+
+# Re-cluster after filtering
+
+```{r}
+# Include high resolutions (1, 2, 5) to resolve rare cycling T cells from cycling VICs
+high_res <- c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 1, 2, 5)
+cycling <- harmony_cluster(cycling, dims = 1:30, resolutions = high_res)
+plot_cluster_umaps(cycling, resolutions = high_res)
+```
+
+```{r}
+Idents(cycling) <- "RNA_snn_res.0.3"
+FAM(cycling, "cycling_0.3", output_path = output_path)
+```
+
+```{r}
+# Compare with Cell Ranger automated predictions to guide lineage assignment
+DimPlot(cycling, group.by = "predicted_coarse_cell_type", cols = "polychrome") + coord_equal()
+DimPlot(cycling, group.by = "predicted_fine_cell_type") + coord_equal()
+table(cycling$predicted_coarse_cell_type)
+table(cycling$predicted_fine_cell_type)
+```
+
+```{r}
+# Confirm QC metrics are clean after filtering
+plot_qc_by_cluster(cycling, "RNA_snn_res.0.3", show_doublets = FALSE)
+```
+
+# Annotation
+
+```{r}
+# Assign parent cell type lineage based on marker gene expression
+cycling$annotations_level1 <- "proliferating"
+DimPlot(cycling, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+
+cycling$annotations_level2_readable <- "proliferating"
+cycling$annotations_level2_readable[cycling$RNA_snn_res.0.3 == "0"] <- "proliferating-immune"
+cycling$annotations_level2_readable[cycling$RNA_snn_res.0.3 == "1"] <- "proliferating-mesenchymal"
+DimPlot(cycling, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+
+# Fine-grained sequential labels
+cycling$annotations_level2 <- paste0("cyclingn", as.numeric(cycling$RNA_snn_res.0.3))
+cycling$annotations_level2 <- factor(cycling$annotations_level2, levels = sort(unique(cycling$annotations_level2)))
+DimPlot(cycling, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+Idents(cycling) <- "annotations_level2"
+FAM(cycling, "cycling_annotations_level2", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(cycling, paste0(output_path, "cycling.rds"))
+```
+
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_08.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_08.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

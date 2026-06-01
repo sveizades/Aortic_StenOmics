@@ -1,0 +1,310 @@
+---
+title: "02: FAPI statistics"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to analyse the mIF data for FAP and CNN1 staining localisation
+
+## Load packages
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(broom)
+library(emmeans)
+library(rstatix)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/02_FAPI_statistics/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+```{r}
+FAPI_data <- read.csv("../01_data/SALTIRE3_raw_data_formatted.csv")
+```
+
+```{r}
+ggplot(FAPI_data, aes(x = Age_at_Consent)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$Age_at_Consent, main = "Raw")
+hist(log1p(FAPI_data$Age_at_Consent), main = "Log-transformed")
+
+ggplot(FAPI_data, aes(x = TBRmax)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$TBRmax, main = "Raw")
+hist(log1p(FAPI_data$TBRmax), main = "Log-transformed")
+
+ggplot(FAPI_data, aes(x = CT_Calcium_Score)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$CT_Calcium_Score, main = "Raw")
+hist(log1p(FAPI_data$CT_Calcium_Score), main = "Log-transformed")
+
+
+ggplot(FAPI_data, aes(x = AVE_AV_Vmax)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$AVE_AV_Vmax, main = "Raw")
+hist(log1p(FAPI_data$AVE_AV_Vmax), main = "Log-transformed")
+
+ggplot(FAPI_data, aes(x = Non_Calcific_Volume)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$Non_Calcific_Volume, main = "Raw")
+hist(log1p(FAPI_data$Non_Calcific_Volume), main = "Log-transformed")
+
+ggplot(FAPI_data, aes(x = Calcific_Volume)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$Calcific_Volume, main = "Raw")
+hist(log1p(FAPI_data$Calcific_Volume), main = "Log-transformed")
+
+ggplot(FAPI_data, aes(x = Indexed_Non_Calcific_Volume)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$Indexed_Non_Calcific_Volume, main = "Raw")
+hist(log1p(FAPI_data$Indexed_Non_Calcific_Volume), main = "Log-transformed")
+ggplot(FAPI_data, aes(x = Indexed_Calcific_Volume)) + geom_histogram(bins = 30)
+
+par(mfrow = c(1, 2))
+hist(FAPI_data$Indexed_Calcific_Volume, main = "Raw")
+hist(log1p(FAPI_data$Indexed_Calcific_Volume), main = "Log-transformed")
+```
+
+```{r}
+df_FAPI_data <- FAPI_data %>%
+  mutate(
+    Disease_Severity = factor(
+      Disease_Severity,
+      levels = c("Control", "Sclerosis", "Mild", "Moderate", "Severe"),
+      ordered = TRUE
+    ),
+    Sex = factor(Sex),
+    Sex_male = as.numeric(Sex == "Male"),
+    Hypertension = factor(Hypertension),
+    Hypertension_Yes = as.numeric(Hypertension == "Yes"),
+    Diabetes = factor(Diabetes),
+    Diabetes_Yes = as.numeric(Diabetes == "Yes"),
+    Calcific_Volume_log1p = log1p(Calcific_Volume),
+    CT_Calcium_Score_log1p = log1p(CT_Calcium_Score),
+    Age_at_Consent_z = scale(Age_at_Consent)[,1],
+    Calcific_z       = scale(Calcific_Volume_log1p)[,1],
+    Non_Calcific_z   = scale(Non_Calcific_Volume)[,1],
+    log_TBRmax       = log(TBRmax)
+  )
+
+df_FAPI_data_autoplaq <- df_FAPI_data %>%
+  filter(!is.na(Calcific_Volume))
+```
+
+```{r}
+df_trend <- df_FAPI_data %>%
+  mutate(severity_score = as.numeric(Disease_Severity) - 1)
+
+fit_trend <- lm(TBRmax ~ severity_score, data = df_trend)
+summary(fit_trend)
+tidy_model <- function(fit) broom::tidy(fit, conf.int = TRUE)
+
+tbl_trend <- tidy_model(fit_trend)
+
+write.csv(tbl_trend, file = paste0(output_path, "Figure_3c_ASdiagnosis_FAPI_trend_stats.csv"), row.names = F)
+```
+
+
+```{r}
+ct <- cor.test(df_FAPI_data$AVE_AV_Vmax,
+               df_FAPI_data$TBRmax,
+               method = "pearson")
+cor_table <- data.frame(
+  Method      = ct$method,
+  Correlation = ct$estimate,
+  CI_lower    = ct$conf.int[1],
+  CI_upper    = ct$conf.int[2],
+  p_value     = ct$p.value,
+  n           = ct$parameter + 2 
+)
+
+cor_table
+write.csv(x = cor_table, paste0(output_path, "Figure_3e_Vmax_TBRmax_correlation.csv"),
+          row.names = FALSE)
+
+ct <- cor.test(
+  df_FAPI_data$TBRmax,
+  df_FAPI_data$CT_Calcium_Score_log1p,
+  method = "pearson"
+)
+cor_table <- data.frame(
+  Method      = ct$method,
+  Correlation = ct$estimate,
+  CI_lower    = ct$conf.int[1],
+  CI_upper    = ct$conf.int[2],
+  p_value     = ct$p.value,
+  n           = ct$parameter + 2 
+)
+
+cor_table
+write.csv(x = cor_table, paste0(output_path, "Figure_3d_CTcalcium_TBRmax_correlation.csv"),
+          row.names = FALSE)
+
+
+ct <- cor.test(
+  df_FAPI_data_autoplaq$Non_Calcific_Volume,
+  df_FAPI_data_autoplaq$TBRmax,
+  method = "pearson"
+)
+cor_table <- data.frame(
+  Method      = ct$method,
+  Correlation = ct$estimate,
+  CI_lower    = ct$conf.int[1],
+  CI_upper    = ct$conf.int[2],
+  p_value     = ct$p.value,
+  n           = ct$parameter + 2  # df = n-2 for Pearson
+)
+
+cor_table
+write.csv(x = cor_table, paste0(output_path, "Figure_3f_NonCalcificThickening_TBRmax_correlation.csv"),
+          row.names = FALSE)
+
+ct <- cor.test(
+  df_FAPI_data_autoplaq$Calcific_Volume_log1p,
+  df_FAPI_data_autoplaq$TBRmax,
+  method = "pearson"
+)
+cor_table <- data.frame(
+  Method      = ct$method,
+  Correlation = ct$estimate,
+  CI_lower    = ct$conf.int[1],
+  CI_upper    = ct$conf.int[2],
+  p_value     = ct$p.value,
+  n           = ct$parameter + 2  # df = n-2 for Pearson
+)
+
+cor_table
+write.csv(x = cor_table, paste0(output_path, "Figure_3g_CalcificThickening_TBRmax_correlation.csv"),
+          row.names = FALSE)
+```
+
+```{r}
+fit <- lm(log_TBRmax ~ Age_at_Consent_z + Sex_male + Hypertension_Yes + 
+          Diabetes_Yes + Calcific_z + Non_Calcific_z, 
+          data = df_FAPI_data_autoplaq)
+summary(fit)
+```
+
+```{r}
+# Visual
+par(mfrow = c(2, 2))
+plot(fit)
+
+# Formal tests
+shapiro.test(resid(fit))           # normality
+library(car)
+vif(fit)                           # collinearity
+library(lmtest)
+bptest(fit)                        # heteroscedasticity
+```
+
+```{r}
+library(sandwich)
+library(lmtest)
+robust <- coeftest(fit, vcov = vcovHC(fit, type = "HC3"))
+robust
+```
+```{r}
+robust_tidy <- broom::tidy(robust, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    label = case_when(
+      term == "Age_at_Consent_z" ~ "Age",
+      term == "Sex_male"         ~ "Male sex",
+      term == "Hypertension_Yes" ~ "Hypertension",
+      term == "Diabetes_Yes"     ~ "Diabetes",
+      term == "Calcific_z"       ~ "Calcific volume",
+      term == "Non_Calcific_z"   ~ "Non-calcific volume"
+    ),
+    `β (95% CI)` = sprintf("%.3f (%.3f to %.3f)", estimate, conf.low, conf.high),
+    P = case_when(p.value < 0.001 ~ "<0.001", TRUE ~ sprintf("%.3f", p.value))
+  )
+
+# Final table
+robust_tidy %>% select(label, `β (95% CI)`, P)
+
+cat(sprintf(
+  "n = %d; Adjusted R² = %.3f; F-test P = %.2e; all VIF < %.1f\nOutcome: log(TBRmax). Calcific and non-calcific volumes log-transformed prior to standardisation. HC3 robust standard errors.",
+  nobs(fit),
+  summary(fit)$adj.r.squared,
+  pf(summary(fit)$fstatistic[1], summary(fit)$fstatistic[2],
+     summary(fit)$fstatistic[3], lower.tail = FALSE),
+  max(vif(fit))
+))
+```
+
+```{r}
+library(openxlsx)
+# Build the table
+tbl_out <- robust_tidy %>% select(label, `β (95% CI)`, P)
+
+# Build the footnote
+footnote <- sprintf(
+  "n = %d; Adjusted R² = %.3f; F-test P = %.2e; all VIF < %.1f. Outcome: log(TBRmax). Calcific volume log-transformed prior to standardisation. HC3 robust standard errors.",
+  nobs(fit),
+  summary(fit)$adj.r.squared,
+  pf(summary(fit)$fstatistic[1], summary(fit)$fstatistic[2],
+     summary(fit)$fstatistic[3], lower.tail = FALSE),
+  max(vif(fit))
+)
+
+wb <- createWorkbook()
+addWorksheet(wb, "MVA")
+writeData(wb, "MVA", tbl_out)
+writeData(wb, "MVA", footnote, startRow = nrow(tbl_out) + 2, startCol = 1)
+
+# Style the footnote row
+addStyle(wb, "MVA",
+         style = createStyle(fontSize = 9, textDecoration = "italic"),
+         rows = nrow(tbl_out) + 2, cols = 1)
+
+saveWorkbook(wb, paste0(output_path, "Supplemental_Table_7_TBRmax_MVA.xlsx"), overwrite = TRUE)
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_02.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_02.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

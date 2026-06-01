@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-24T17:20:44.177935",
+    "czi_path": "../01_data/CureAS_Severe_AV_18285BH1_H-E.czi",
+    "original_shape": [
+      46734,
+      35913,
+      3
+    ],
+    "pixel_size_um": 0.2200143009295604,
+    "stage": 1
+  },
+  "parameters": {
+    "rotation": 124.0,
+    "broad_crop_bbox": [
+      2464,
+      13739,
+      57981,
+      33440
+    ]
+  },
+  "output": {
+    "npy_path": "/Users/stefan/UoE/AorticStenOmics/Aortic_StenOmics/99_figures/02_notebooks/../01_data/microscopy/Figure_1c_severe_stage1.npy",
+    "aligned_shape": [
+      19701,
+      55517,
+      3
+    ]
+  }
+}

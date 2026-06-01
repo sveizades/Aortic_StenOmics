@@ -1,0 +1,152 @@
+---
+title: "09: SALTIRE3 scRNA-seq Cycling Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the cycling cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/09_S3_scRNAseq_cycling_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+cycling <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/cycling.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+cycling <- harmony_cluster(cycling, dims = 1:30)
+plot_cluster_umaps(cycling)
+```
+
+```{r}
+plot_qc_by_cluster(cycling, "RNA_snn_res.0.4")
+```
+
+```{r}
+Idents(cycling) <- "RNA_snn_res.0.4"
+FAM(cycling, "preqc_cycling_0.4", output_path = output_path)
+```
+
+## QC filtering
+
+Remove known doublets only; no cluster-level QC filtering required.
+
+```{r}
+dim(cycling)
+cycling <- subset(cycling, known_doublet == T, invert = T)
+dim(cycling)
+```
+
+# Re-cluster after filtering
+
+```{r}
+cycling <- harmony_cluster(cycling, dims = 1:30)
+plot_cluster_umaps(cycling)
+```
+
+```{r}
+plot_qc_by_cluster(cycling, "RNA_snn_res.0.4", show_doublets = FALSE)
+```
+
+```{r}
+Idents(cycling) <- "RNA_snn_res.0.4"
+FAM(cycling, "cycling_0.4", output_path = output_path)
+```
+
+```{r}
+# Use Cell Ranger cell-type predictions to cross-validate cluster identity
+majority_labels <- cycling@meta.data %>%
+  dplyr::group_by(RNA_snn_res.0.4) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+cycling$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(cycling$RNA_snn_res.0.4, majority_labels$RNA_snn_res.0.4)]
+DimPlot(cycling, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Annotation
+
+```{r}
+# All cells are assigned to "Proliferating" at level 2; level 3 assigns cell-type origin
+cycling$annotations_level1 <- "Proliferating"
+cycling$annotations_level2_readable <- "Proliferating"
+
+cycling$annotations_level3_readable <- ""
+cycling$annotations_level3_readable[cycling$RNA_snn_res.0.4 == "0"] <- "T-cycling"
+cycling$annotations_level3_readable[cycling$RNA_snn_res.0.4 %in% c("1", "2")] <- "Myeloid-cycling"
+cycling$annotations_level3_readable[cycling$RNA_snn_res.0.4 == "3"] <- "VIC-cycling"
+cycling$annotations_level3_readable[cycling$RNA_snn_res.0.4 == "4"] <- "NK-cycling"
+
+cycling$annotations_level3 <- mapvalues(cycling$annotations_level3_readable,
+  from = names(sort(table(cycling$annotations_level3_readable), decreasing = T)),
+  to   = paste0("cyclingc", 1:length(unique(cycling$annotations_level3_readable))))
+cycling$annotations_level3 <- factor(cycling$annotations_level3, levels = sort(unique(cycling$annotations_level3)))
+cycling$annotations_level2 <- "proliferating"
+
+DimPlot(cycling, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(cycling, reduction = "umap", group.by = "annotations_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+Idents(cycling) <- "annotations_level3_readable"
+FAM(cycling, "cycling_annotations_level3_readable", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(cycling, paste0(output_path, "cycling.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_09.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_09.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

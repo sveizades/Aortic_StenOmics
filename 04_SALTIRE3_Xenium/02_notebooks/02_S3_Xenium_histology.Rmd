@@ -1,0 +1,165 @@
+---
+title: "02: SALTIRE3 Xenium histology"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to assess the histology of sections adjacent
+to the Xenium capture areas, align histological annotations to Xenium coordinates,
+and compute per-cell distances to annotated tissue structures.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(pheatmap)
+library(sf)
+library(scico)
+library(dittoSeq)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/02_SALTIRE3_xenium_histology/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+
+# Helper functions for affine-transforming QuPath annotation geometries
+# into Xenium pixel coordinates
+affine_xy <- function(xy, M) {
+  # xy: n x 2 matrix; M: 3x3 affine transformation matrix
+  out <- cbind(xy, 1) %*% t(M)
+  out[, 1:2, drop = FALSE]
+}
+
+# Apply affine transformation to an sf POLYGON/MULTIPOLYGON geometry,
+# optionally rescaling by pixel_size (micrometres per pixel)
+affine_geom <- function(g, M, pixel_size = NULL) {
+  g <- sf::st_cast(g, "MULTIPOLYGON")
+
+  xy <- sf::st_coordinates(g)
+  xy2 <- affine_xy(xy[, c("X","Y"), drop = FALSE], M)
+
+  if (!is.null(pixel_size)) {
+    xy2 <- xy2 * pixel_size
+  }
+
+  # Rebuild MULTIPOLYGON structure using L1 (polygon id) and L2 (ring id)
+  df <- data.frame(
+    X = xy2[,1], Y = xy2[,2],
+    L1 = xy[, "L1"], L2 = xy[, "L2"]
+  )
+
+  polys <- lapply(split(df, df$L1), function(p1) {
+    rings <- lapply(split(p1, p1$L2), function(r) {
+      as.matrix(r[, c("X","Y"), drop = FALSE])
+    })
+    rings
+  })
+
+  sf::st_multipolygon(polys)
+}
+```
+
+## Read in data
+
+```{r}
+atlas_lim <- readRDS("../03_output/01_SALTIRE3_xenium_preprocessing/atlas_lim.rds")
+```
+
+# Add scNiche assignments
+
+```{r}
+niches <- read.csv("../01_data/scNiche_cell_assignments.csv", row.names = 1)
+```
+
+```{r}
+niches$scNiche <- plyr::mapvalues(niches$scNiche, from = paste0("Niche", 0:3), to = c("Cap", "Spongiosa", "Peri-nodular", "Immune"))
+atlas_lim$niche <- niches$scNiche
+DimPlot(atlas_lim, group.by = "niche", raster = F, cols = spatial_niche_cols)+coord_equal()
+```
+
+# Align histological annotations and compute distances to nodule edge
+
+```{r}
+annotations <- rbind(read_sf("../01_data/E251106C_BI5XO-A10_PH2N_Scan1_all_annotations.geojson"), read_sf("../01_data/E251106C_BXNFB-A10_PH2N_Scan1.geojson"))
+annotations <- annotations[!is.na(annotations$name),]
+annotations$name <- gsub(x = annotations$name, pattern = "B15XO", replacement = "BI5XO")
+```
+
+```{r}
+pixel_size <- 0.2125
+atlas_lim$dist_to_nodule_edge <- 999
+for(i in unique(atlas_lim$slide_id)){
+  # Read affine transformation matrix from QuPath-Xenium alignment
+  M <- matrix(scan(paste0("../01_data/Post_Xenium_IF_alignment_files_", i, "/matrix.csv"), sep=","), nrow=3, byrow=TRUE)
+
+  # Extract nodular tissue annotation polygon for this slide
+  sf_obj <- annotations[annotations$name == paste0(i, " Nodular Tissue"),]
+  sf::st_crs(sf_obj) <- sf::st_crs(NA)
+
+  # Transform nodular tissue polygon to Xenium coordinate space
+  sf_obj_xenium <- sf_obj
+  sf::st_geometry(sf_obj_xenium) <- sf::st_sfc(
+    lapply(sf::st_geometry(sf_obj), affine_geom, M = M, pixel_size = pixel_size),
+    crs = sf::st_crs(NA)
+  )
+
+  # Get cell coordinates for this slide
+  coords <- GetTissueCoordinates(atlas_lim, image = i)
+  cells_sf <- st_as_sf(
+    coords,
+    coords = c("x", "y"),
+    crs = NA
+  )
+
+  # Calculate per-cell distance to nodule boundary
+  d <- st_distance(cells_sf, sf_obj_xenium)
+
+  atlas_lim$dist_to_nodule_edge[atlas_lim$slide_id == i] <- as.numeric(d)
+}
+```
+
+# Save
+
+```{r}
+saveRDS(atlas_lim, paste0(output_path, "atlas_lim.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_02.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_02.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,143 @@
+---
+title: "02: UBC snRNA-seq SNP Demultiplexing"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to assign donor IDs to cells using SNP genotyping concordance. For each pooled capture, souporcell cluster genotypes are compared against a reference WGS VCF using pairwise genotype concordance, and the best-matching donor is assigned to each cluster. Single-donor captures are assigned directly from the pool metadata.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(scDblFinder)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(viridis)
+library(RColorBrewer)
+library(patchwork)
+library(VariantAnnotation)
+library(GenomicRanges)
+library(pheatmap)
+library(readxl)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/02_UBC_snRNAseq_dehashing/"
+if(!dir.exists(output_path)) dir.create(output_path)
+souporcell_path <- "../01_data/souporcell_output/"
+
+# Functions
+source("../../utils.R")
+```
+
+## Download and read in data
+
+```{r}
+# UBC_patient_pools maps each pool_id to the donor IDs it contains
+UBC_patient_pools <- as.data.frame(read_xlsx("../../00_study_design/UBC_patient_pools.xlsx"))
+atlas <- readRDS("../03_output/01_UBC_snRNAseq_preprocessing/UBCnucatlas_preprocessed.rds")
+# Load reference WGS genotypes for all UBC donors
+reference_vcf <- load_vcf_genotypes("../../00_study_design/genotype_data.vcf")
+# Prepend "chr" to match the chromosome naming convention used by souporcell VCFs
+rownames(reference_vcf) <- paste0("chr", rownames(reference_vcf))
+```
+
+# Demultiplex pooled samples
+
+## Preset values
+
+```{r}
+# souporcell encodes cell assignment as a cluster index ("0", "1", ...), "doublet",
+# or "unassigned"; not_pooled cells were set to "not_pooled" in preprocessing.
+# Taking the first character gives a compact key: digit = singlet cluster,
+# "d" = doublet, "u" = unassigned, "n" = not_pooled (single-donor capture).
+atlas$singlet_holder <- substring(atlas$assignment, first = 1, last = 1)
+atlas$multiplex_id <- paste0(atlas$pool_id, "_", atlas$singlet_holder)
+table(atlas$multiplex_id)
+```
+
+## Iterate through pools and assign donor matches
+
+```{r}
+atlas$donor_id <- ""
+
+# Process pooled captures (singlet_holder != "n", i.e. not single-donor captures).
+# For each pool, match souporcell cluster genotypes to reference WGS genotypes by
+# pairwise concordance, then map cluster indices to donor IDs.
+# Doublet/unassigned cells pass through mapvalues unchanged (no matching key found).
+for(i in unique(atlas$pool_id[atlas$singlet_holder != "n"])){
+  souporcell_vcf <- load_vcf_genotypes(paste0(souporcell_path, i, "/cluster_genotypes.vcf"))
+  # Restrict reference to donors known to be in this pool
+  reference_vcf_subset <- reference_vcf[, colnames(reference_vcf) %in% UBC_patient_pools$donor_id[UBC_patient_pools$pool == i]]
+  results <- match_donors(souporcell_vcf, reference_vcf_subset)
+  print(paste0(i, " Dehashing"))
+  print("Similarity Matrix:")
+  print(results$SimilarityMatrix)
+  print("Donor Matches:")
+  print(results$DonorMatches)
+  # Save similarity matrix for manual review
+  heatmap <- pheatmap(
+      results$SimilarityMatrix,
+      cluster_rows = TRUE,
+      cluster_cols = TRUE,
+      main = "Heatmap of Donor Similarity",
+      display_numbers = TRUE,
+      fontsize_number = 10
+  )
+  ggsave(paste0(output_path, i, "_donor_similarity_matrix.pdf"), plot = heatmap)
+  write.csv(results$SimilarityMatrix, file = paste0(output_path, i, "_donor_similarity_matrix.csv"))
+  # Map souporcell cluster index → matched donor ID for all cells in this pool
+  atlas$donor_id[atlas$pool_id == i] <- mapvalues(atlas$singlet_holder[atlas$pool_id == i], from = results$DonorMatches$Donor1, to = results$DonorMatches$Donor2)
+}
+
+# For single-donor captures, assign donor ID directly from pool metadata
+atlas$donor_id[atlas$singlet_holder == "n"] <- mapvalues(atlas$pool_id[atlas$singlet_holder == "n"], from = UBC_patient_pools$pool[UBC_patient_pools$pool %in%  unique(atlas$pool_id[atlas$singlet_holder == "n"])], to = UBC_patient_pools$donor_id[UBC_patient_pools$pool %in%  unique(atlas$pool_id[atlas$singlet_holder == "n"])])
+table(atlas$donor_id)
+```
+
+## Save demultiplexed atlas
+
+```{r}
+saveRDS(atlas, file = paste0(output_path, "dehashed_atlas.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_02.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_02.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

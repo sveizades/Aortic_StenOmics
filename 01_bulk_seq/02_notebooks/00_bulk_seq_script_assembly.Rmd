@@ -1,0 +1,53 @@
+---
+title: "00: QuantSet Script Assemby"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to generate bash scripts for the trimming, quality control, alignment, and counting of bulk RNA-seq data generated using Lexogen's QuantSeq FWD.
+
+## Load packages
+
+```{r}
+library(dplyr)
+library(readxl)
+library(plyr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+sample_info <- as.data.frame(read_excel("../../00_study_design/quantseq_info.xlsx"))
+if(!dir.exists("../03_output/")) dir.create("../03_output/")
+output_path <- "../03_output/00_script_assembly/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+# Write scripts
+
+```{r}
+# Iterate through sample information sheet and generate bash scripts and job submission lines
+script_submission <- ""
+for(i in rownames(sample_info)){
+  quantseq_alignment(sample_id = sample_info[i,"sample_id"], sample_id_fastq = sample_info[i,"fastq_name"], output_path = output_path)
+  script_submission <- paste0(script_submission, "qsub ", sample_info[i,"sample_id"], "_alignment_script.sh\n")
+}
+writeLines(script_submission, paste0(output_path,"script_submission.txt"))
+```

@@ -1,0 +1,176 @@
+---
+title: "07: SALTIRE3 scRNA-seq B Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the B cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/07_S3_scRNAseq_b_cells_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+b_cells <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/b_cells.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+b_cells <- harmony_cluster(b_cells, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(b_cells)
+```
+
+```{r}
+plot_qc_by_cluster(b_cells, "RNA_snn_res.0.2")
+```
+
+```{r}
+Idents(b_cells) <- "RNA_snn_res.0.2"
+FAM(b_cells, "preqc_b_cells_0.2", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.2 clusters 3/8 (mesenchyme), 4 (myeloid), and 5 (TNK) are doublet clusters; cluster 7 is poor quality.
+
+```{r}
+dim(b_cells)
+b_cells <- subset(b_cells, RNA_snn_res.0.2 %in% c("3", "4", "5", "7", "8") | known_doublet == T, invert = T)
+dim(b_cells)
+```
+
+# Re-cluster after filtering
+
+```{r}
+# Regress out IEG expression artefacts in the final embedding
+b_cells <- harmony_cluster(b_cells, dims = 1:30, use_integration_features = TRUE,
+                           vars.to.regress = "percent_ieg")
+plot_cluster_umaps(b_cells)
+```
+
+```{r}
+plot_qc_by_cluster(b_cells, "RNA_snn_res.0.2", show_doublets = T)
+```
+
+```{r}
+Idents(b_cells) <- "RNA_snn_res.0.2"
+FAM(b_cells, "b_cells_0.2", output_path = output_path)
+Idents(b_cells) <- "RNA_snn_res.0.1"
+FAM(b_cells, "b_cells_0.1", output_path = output_path)
+```
+
+```{r}
+# Use Cell Ranger cell-type predictions to cross-validate cluster identity
+majority_labels <- b_cells@meta.data %>%
+  dplyr::group_by(RNA_snn_res.0.2) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+b_cells$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(b_cells$RNA_snn_res.0.2, majority_labels$RNA_snn_res.0.2)]
+DimPlot(b_cells, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+# Immunoglobulin gene expression to distinguish B cell subtypes and plasma cells
+DotPlot(b_cells, features = c(
+    "IGHA2", "IGHA1", "JCHAIN", "IGHM", "IGLC2", "IGLL5", "IGLC3",
+    "IGHG1", "IGHG4", "IGHG3", "IGHG2", "IGHGP", "IGLC7", "IGKC"
+  ), group.by = "RNA_snn_res.0.2", cols = "RdBu") + RotatedAxis() + coord_equal()
+```
+
+# Annotation
+
+```{r}
+b_cells$annotations_level3_readable <- mapvalues(b_cells$RNA_snn_res.0.2,
+  from = sort(unique(b_cells$RNA_snn_res.0.2)),
+  to   = c("B-naive","B-memory", "Plasma_cell", "Plasma_cell", "pDC", "B-naive"))
+b_cells$annotations_level3_readable <- factor(b_cells$annotations_level3_readable,
+  levels = names(sort(table(b_cells$annotations_level3_readable), decreasing = T)))
+b_cells$annotations_level3 <- mapvalues(b_cells$annotations_level3_readable,
+  from = names(sort(table(b_cells$annotations_level3_readable), decreasing = T)),
+  to   = paste0("Bc", 1:length(unique(b_cells$annotations_level3_readable))))
+b_cells$annotations_level3 <- factor(b_cells$annotations_level3, levels = sort(unique(b_cells$annotations_level3)))
+
+b_cells$annotations_level2_readable <- mapvalues(b_cells$RNA_snn_res.0.2,
+  from = sort(unique(b_cells$RNA_snn_res.0.2)),
+  to   = c("B_cell","B_cell", "Plasma_cell", "Plasma_cell", "pDC", "B_cell"))
+b_cells$annotations_level2_readable <- factor(b_cells$annotations_level2_readable,
+  levels = names(sort(table(b_cells$annotations_level2_readable), decreasing = T)))
+b_cells$annotations_level2 <- mapvalues(b_cells$annotations_level2_readable,
+  from = names(sort(table(b_cells$annotations_level2_readable), decreasing = T)),
+  to   = paste0("Bc", 1:length(unique(b_cells$annotations_level2_readable))))
+b_cells$annotations_level2 <- factor(b_cells$annotations_level2, levels = sort(unique(b_cells$annotations_level2)))
+
+DimPlot(b_cells, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(b_cells, reduction = "umap", group.by = "annotations_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+Idents(b_cells) <- "annotations_level2_readable"
+FAM(b_cells, "b_cells_annotations_level2_readable", output_path = output_path)
+Idents(b_cells) <- "annotations_level3_readable"
+FAM(b_cells, "b_cells_annotations_level3_readable", output_path = output_path)
+```
+
+```{r}
+# Flag any residual myeloid cells that ended up in b_cells
+b_cells$annotations_level1[b_cells$RNA_snn_res.0.2 %in% c("4")] <- "myeloid"
+DimPlot(b_cells, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Save
+
+```{r}
+saveRDS(b_cells, paste0(output_path, "b_cells.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_07.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_07.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

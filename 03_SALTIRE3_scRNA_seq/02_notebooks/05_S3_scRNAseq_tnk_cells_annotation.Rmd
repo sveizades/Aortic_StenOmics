@@ -1,0 +1,418 @@
+---
+title: "05: SALTIRE3 scRNA-seq T/NK Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the T and NK cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/05_S3_scRNAseq_tnk_cells_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+tnk_cells <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/tnk_cells.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+tnk_cells <- harmony_cluster(tnk_cells, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(tnk_cells)
+```
+
+```{r}
+plot_qc_by_cluster(tnk_cells, "RNA_snn_res.0.4")
+```
+
+```{r}
+Idents(tnk_cells) <- "RNA_snn_res.0.4"
+FAM(tnk_cells, "preqc_tnk_cells_0.4", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.4 clusters 3/11 (mesenchyme) and 9 (MP) are doublet clusters; cluster 10 is low quality.
+
+```{r}
+dim(tnk_cells)
+tnk_cells <- subset(tnk_cells, RNA_snn_res.0.4 %in% c("3", "11", "9", "10") | known_doublet == T, invert = T)
+dim(tnk_cells)
+```
+
+# Second clustering round
+
+```{r}
+tnk_cells <- harmony_cluster(tnk_cells, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(tnk_cells)
+```
+
+```{r}
+plot_qc_by_cluster(tnk_cells, "RNA_snn_res.0.4", show_doublets = FALSE)
+```
+
+```{r}
+# Interactive histograms to inspect count/feature distributions before second filter
+plot_ly(x = tnk_cells$nCount_RNA, type = "histogram")
+plot_ly(x = tnk_cells$nFeature_RNA, type = "histogram")
+```
+
+```{r}
+FeaturePlot(tnk_cells, features = "scDblFinder.score", order = T) + coord_equal()
+FeaturePlot(tnk_cells, features = "CD3E", order = T) + coord_equal()
+```
+
+```{r}
+Idents(tnk_cells) <- "RNA_snn_res.0.4"
+FAM(tnk_cells, "preqc2_tnk_cells_0.4", output_path = output_path)
+```
+
+## Second QC filtering
+
+RNA_snn_res.0.4 cluster 11 is a mast cell doublet cluster.
+
+```{r}
+dim(tnk_cells)
+tnk_cells <- subset(tnk_cells, RNA_snn_res.0.4 %in% c("11"), invert = T)
+dim(tnk_cells)
+```
+
+# Final clustering round
+
+```{r}
+# Regress out IEG expression artefacts in the final embedding; extend to high
+# resolutions to resolve fine T cell subtypes
+tnk_cells <- harmony_cluster(tnk_cells, dims = 1:30, use_integration_features = TRUE,
+                             resolutions = c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 1, 2, 3),
+                             vars.to.regress = "percent_ieg")
+plot_cluster_umaps(tnk_cells)
+```
+
+```{r}
+DimPlot(tnk_cells, reduction = "umap", group.by = "RNA_snn_res.1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(tnk_cells, reduction = "umap", group.by = "RNA_snn_res.2", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(tnk_cells, reduction = "umap", group.by = "RNA_snn_res.3", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+FeaturePlot(tnk_cells, features = "TRAC") + coord_equal()
+FeaturePlot(tnk_cells, features = "CD3D") + coord_equal()
+FeaturePlot(tnk_cells, features = "KLRF1") + coord_equal()
+FeaturePlot(tnk_cells, features = "NKG7") + coord_equal()
+```
+
+```{r}
+Idents(tnk_cells) <- "RNA_snn_res.0.4"
+FAM(tnk_cells, "tnk_cells_0.4", output_path = output_path)
+Idents(tnk_cells) <- "RNA_snn_res.1"
+FAM(tnk_cells, "tnk_cells_1", output_path = output_path)
+Idents(tnk_cells) <- "RNA_snn_res.2"
+FAM(tnk_cells, "tnk_cells_2", output_path = output_path)
+```
+
+# Rough level 2/3 annotation (NK, gd-T, cycling)
+
+```{r}
+# Use Cell Ranger cell-type predictions to cross-validate cluster identity
+majority_labels <- tnk_cells@meta.data %>%
+  dplyr::group_by(RNA_snn_res.1) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+tnk_cells$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(tnk_cells$RNA_snn_res.1, majority_labels$RNA_snn_res.1)]
+DimPlot(tnk_cells, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+# Assign NK, gd-T, and cycling cells at res 1; remaining clusters are alpha-beta T cells
+tnk_cells$annotation_level2_readable <- ""
+tnk_cells$annotation_level3_readable <- ""
+tnk_cells$annotation_level2_readable[tnk_cells$RNA_snn_res.1 %in% c("9", "4", "13")] <- "NK"
+tnk_cells$annotation_level3_readable[tnk_cells$RNA_snn_res.1 %in% c("4", "13")] <- "NK-CD56-bright"
+tnk_cells$annotation_level3_readable[tnk_cells$RNA_snn_res.1 == "9"] <- "NK-CD56-dim"
+tnk_cells$annotation_level2_readable[tnk_cells$RNA_snn_res.1 == "15"] <- "TNK-cycling"
+tnk_cells$annotation_level3_readable[tnk_cells$RNA_snn_res.1 == "15"] <- "TNK-cycling"
+tnk_cells$annotation_level2_readable[tnk_cells$RNA_snn_res.1 == "14"] <- "T-gd"
+tnk_cells$annotation_level3_readable[tnk_cells$RNA_snn_res.1 == "14"] <- "T-gd-cyto"
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotation_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotation_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Alpha-beta T cell subclustering
+
+```{r}
+# Subset alpha-beta T cells for fine CD4/CD8 annotation
+dim(tnk_cells)
+abt <- subset(tnk_cells, RNA_snn_res.1 %in% c("9", "4", "13", '14', '15'), invert = T)
+dim(abt)
+abt <- harmony_cluster(abt, dims = 1:30, use_integration_features = TRUE,
+                       resolutions = c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4),
+                       vars.to.regress = "percent_ieg")
+plot_cluster_umaps(abt)
+```
+
+```{r}
+FeaturePlot(abt, features = "CD4") + coord_equal()
+FeaturePlot(abt, features = "CD40LG") + coord_equal()
+FeaturePlot(abt, features = "CD8A") + coord_equal()
+FeaturePlot(abt, features = "CD8B") + coord_equal()
+```
+
+```{r}
+Idents(abt) <- "RNA_snn_res.0.4"
+FAM(abt, "abt_cells_0.4", output_path = output_path)
+```
+
+```{r}
+FeaturePlot(abt, features = "CCR7") + coord_equal()
+
+```
+
+
+```{r}
+# Subcluster cluster 4 to resolve CD4/CD8 boundary
+abt <- FindSubCluster(abt, cluster = "4", resolution = 0.8, graph.name = "RNA_snn")
+DimPlot(abt, reduction = "umap", group.by = "sub.cluster", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+# Subcluster cluster 1 to separate a CD4+ minority
+abt <- FindSubCluster(abt, cluster = "1", resolution = 0.1, subcluster.name = "sub.cluster.2", graph.name = "RNA_snn")
+DimPlot(abt, reduction = "umap", group.by = "sub.cluster.2", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+DotPlot(abt, features = c("CD4", "CD40LG", "CD8A", "CD8B"), cols = "RdBu", group.by = "sub.cluster", col.max = 1, col.min = -1) + RotatedAxis() + coord_equal()
+DotPlot(abt, features = c("CD4", "CD40LG", "CD8A", "CD8B"), cols = "RdBu", group.by = "sub.cluster.2", col.max = 1, col.min = -1) + RotatedAxis() + coord_equal()
+```
+
+```{r}
+abt$annotation_level2_readable <- ""
+abt$annotation_level3_readable <- ""
+abt$annotation_level2_readable[abt$RNA_snn_res.0.4 == "8"] <- "T-gd"
+abt$annotation_level3_readable[abt$RNA_snn_res.0.4 == "8"] <- "T-gd-V9"
+abt$annotation_level2_readable[abt$sub.cluster %in% c("0", "2", "4_1", "4_3", "5", "7")] <- "T-CD4"
+abt$annotation_level2_readable[abt$sub.cluster %in% c("1", "3", "4_0", "4_2", "4_4", "6")] <- "T-CD8"
+abt$annotation_level2_readable[abt$sub.cluster.2 %in% c("1_1")] <- "T-CD4"
+DimPlot(abt, reduction = "umap", group.by = "annotation_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(abt, reduction = "umap", group.by = "annotation_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+## CD4 T cell subclustering
+
+```{r}
+dim(abt)
+CD4 <- subset(abt, annotation_level2_readable == "T-CD4")
+dim(CD4)
+# Re-embed CD4 cells only for fine subtype resolution
+CD4 <- RunPCA(CD4) %>%
+  RunHarmony(group.by.vars = "donor_id") %>%
+  FindNeighbors(reduction = "harmony", dims = 1:30) %>%
+  FindClusters(resolution = c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3)) %>%
+  RunUMAP(dims = 1:30, reduction = "harmony", return.model = T)
+plot_cluster_umaps(CD4)
+```
+
+```{r}
+DimPlot(CD4, reduction = "umap", group.by = "RNA_snn_res.0.5", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(CD4, reduction = "umap", group.by = "RNA_snn_res.1", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(CD4, reduction = "umap", group.by = "RNA_snn_res.2", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(CD4, reduction = "umap", group.by = "RNA_snn_res.3", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(CD4) <- "RNA_snn_res.0.4"
+FAM(CD4, "CD4_cells_0.4", output_path = output_path)
+Idents(CD4) <- "RNA_snn_res.0.2"
+FAM(CD4, "CD4_cells_0.2", output_path = output_path)
+Idents(CD4) <- "RNA_snn_res.1"
+FAM(CD4, "CD4_cells_1", output_path = output_path)
+```
+
+```{r}
+FeaturePlot(CD4, features = "CD4") + coord_equal()
+FeaturePlot(CD4, features = "CD40LG") + coord_equal()
+FeaturePlot(CD4, features = "CD8A") + coord_equal()
+FeaturePlot(CD4, features = "CD8B") + coord_equal()
+FeaturePlot(CD4, features = "CCR7") + coord_equal()
+FeaturePlot(CD4, features = "SELL") + coord_equal()
+FeaturePlot(CD4, features = "TCF7") + coord_equal()
+FeaturePlot(CD4, features = "CD69") + coord_equal()
+FeaturePlot(CD4, features = "FOS") + coord_equal()
+FeaturePlot(CD4, features = "IFNG") + coord_equal()
+FeaturePlot(CD4, features = "TIGIT") + coord_equal()
+FeaturePlot(CD4, features = "FOXP3") + coord_equal()
+FeaturePlot(CD4, features = "GNLY") + coord_equal()
+FeaturePlot(CD4, features = "CCR6") + coord_equal()
+FeaturePlot(CD4, features = "CCL20") + coord_equal()
+FeaturePlot(CD4, features = "GZMK") + coord_equal()
+```
+
+```{r}
+majority_labels <- CD4@meta.data %>%
+  dplyr::group_by(RNA_snn_res.1) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+CD4$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(CD4$RNA_snn_res.1, majority_labels$RNA_snn_res.1)]
+DimPlot(CD4, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+DotPlot(CD4, features = c("CCR7", "SELL", "TCF7", "CD69", "FOS", "IFNG", "TIGIT", "FOXP3", "GNLY", "CCR6", "CCL20", "GZMK"), cols = "RdBu", group.by = "RNA_snn_res.1", col.max = 1, col.min = -1) + RotatedAxis() + coord_equal()
+
+```
+
+```{r}
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 == "4"] <- "T-CD4-naive"
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 %in% c("11", "9")] <- "T-CD4-Treg"
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 %in% c("0", "1", "6", "5", "12")] <- "T-CD4-Th1"
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 %in% c("2", "3", "7")] <- "T-CD4-EM"
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 == "8"] <- "T-CD4-Th17"
+CD4$annotation_level3_readable[CD4$RNA_snn_res.1 == "10"] <- "T-CD4-cyto"
+
+DimPlot(CD4, reduction = "umap", group.by = "annotation_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+## CD8 T cell subclustering
+
+```{r}
+CD8 <- subset(abt, annotation_level2_readable == "T-CD8")
+dim(CD8)
+CD8 <- RunPCA(CD8) %>%
+  RunHarmony(group.by.vars = "donor_id") %>%
+  FindNeighbors(reduction = "harmony", dims = 1:30) %>%
+  FindClusters(resolution = c(0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.3, 0.4)) %>%
+  RunUMAP(dims = 1:30, reduction = "harmony", return.model = T)
+plot_cluster_umaps(CD8)
+```
+
+```{r}
+Idents(CD8) <- "RNA_snn_res.0.2"
+FAM(CD8, "CD8_cells_0.2", output_path = output_path)
+```
+
+```{r}
+FeaturePlot(CD8, features = "CD4") + coord_equal()
+FeaturePlot(CD8, features = "CD40LG") + coord_equal()
+FeaturePlot(CD8, features = "CD8A") + coord_equal()
+FeaturePlot(CD8, features = "CD8B") + coord_equal()
+FeaturePlot(CD8, features = "CCR7") + coord_equal()
+FeaturePlot(CD8, features = "SELL") + coord_equal()
+FeaturePlot(CD8, features = "TCF7") + coord_equal()
+FeaturePlot(CD8, features = "CD69") + coord_equal()
+FeaturePlot(CD8, features = "FOS") + coord_equal()
+FeaturePlot(CD8, features = "IFNG") + coord_equal()
+FeaturePlot(CD8, features = "TIGIT") + coord_equal()
+FeaturePlot(CD8, features = "FOXP3") + coord_equal()
+FeaturePlot(CD8, features = "GNLY") + coord_equal()
+FeaturePlot(CD8, features = "CCR6") + coord_equal()
+FeaturePlot(CD8, features = "CCL20") + coord_equal()
+FeaturePlot(CD8, features = "GZMK") + coord_equal()
+```
+
+```{r}
+majority_labels <- CD8@meta.data %>%
+  dplyr::group_by(RNA_snn_res.0.2) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+CD8$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(CD8$RNA_snn_res.0.2, majority_labels$RNA_snn_res.0.2)]
+DimPlot(CD8, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+CD8$annotation_level3_readable[CD8$RNA_snn_res.0.2 == "0"] <- "T-CD8-EM"
+CD8$annotation_level3_readable[CD8$RNA_snn_res.0.2 == "1"] <- "T-CD8-EM"
+CD8$annotation_level3_readable[CD8$RNA_snn_res.0.2 == "2"] <- "T-CD8-MAIT"
+CD8$annotation_level3_readable[CD8$RNA_snn_res.0.2 == "3"] <- "T-CD8-cyto"
+DimPlot(CD8, reduction = "umap", group.by = "annotation_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Combine subclustering results
+
+```{r}
+# Write CD4/CD8 and gd-T level 2/3 labels back to the full tnk_cells object
+tnk_cells@meta.data[Cells(abt),"annotation_level2_readable"] <- abt$annotation_level2_readable
+tnk_cells@meta.data[Cells(abt)[abt$annotation_level3_readable == "T-gd-V9"],"annotation_level3_readable"] <- abt$annotation_level3_readable[abt$annotation_level3_readable == "T-gd-V9"]
+tnk_cells@meta.data[Cells(CD4),"annotation_level3_readable"] <- CD4$annotation_level3_readable
+tnk_cells@meta.data[Cells(CD8),"annotation_level3_readable"] <- CD8$annotation_level3_readable
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotation_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotation_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Final annotation
+
+```{r}
+tnk_cells$annotations_level2_readable <- factor(tnk_cells$annotation_level2_readable,
+  levels = names(sort(table(tnk_cells$annotation_level2_readable), decreasing = T)))
+tnk_cells$annotations_level2 <- mapvalues(tnk_cells$annotations_level2_readable,
+  from = names(sort(table(tnk_cells$annotations_level2_readable), decreasing = T)),
+  to   = paste0("TNKc", 1:length(unique(tnk_cells$annotations_level2_readable))))
+tnk_cells$annotations_level2 <- factor(tnk_cells$annotations_level2, levels = sort(unique(tnk_cells$annotations_level2)))
+tnk_cells$annotations_level3_readable <- factor(tnk_cells$annotation_level3_readable,
+  levels = names(sort(table(tnk_cells$annotation_level3_readable), decreasing = T)))
+tnk_cells$annotations_level3 <- mapvalues(tnk_cells$annotations_level3_readable,
+  from = names(sort(table(tnk_cells$annotations_level3_readable), decreasing = T)),
+  to   = paste0("TNKc", 1:length(unique(tnk_cells$annotations_level3_readable))))
+tnk_cells$annotations_level3 <- factor(tnk_cells$annotations_level3, levels = sort(unique(tnk_cells$annotations_level3)))
+
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(tnk_cells, reduction = "umap", group.by = "annotations_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Save
+
+```{r}
+saveRDS(tnk_cells, paste0(output_path, "tnk_cells.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_05.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_05.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

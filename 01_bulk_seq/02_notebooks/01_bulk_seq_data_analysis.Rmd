@@ -1,0 +1,296 @@
+---
+title: "01: Bulk RNA-seq Data Analysis"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to perform differential gene expression and pathway analysis of bulk RNA-seq data generated using Lexogen's QuantSeq FWD. Samples are compared across clinical classifications (control, mild/moderate, severe aortic stenosis) using DESeq2.
+
+## Load packages
+
+```{r}
+library(dplyr)
+library(readxl)
+library(DESeq2)
+library(ggplot2)
+library(GSVA)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(biomaRt)
+library(scico)
+library(digest)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_processing_bulkRNAseq/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+# Format sample and sequencing data for DESeq2
+
+```{r}
+# Sample and donor metadata
+sample_info <- as.data.frame(read_excel("../../00_study_design/quantseq_info.xlsx"))
+donor_info <- as.data.frame(read_excel("../../00_study_design/patient_information.xlsx"))
+rownames(donor_info) <- donor_info$donor_id
+sample_donor_info <- left_join(x = sample_info, y = donor_info, by = 'donor_id')
+sample_list <- paste0(sample_donor_info$sample_id[sample_donor_info$bulk_seq == "yes"], "/", sample_donor_info$sample_id[sample_donor_info$bulk_seq == "yes"], "_gene_featureCounts_output.txt")
+write.table(sample_list, file = paste0(output_path, "featureCounts_file_list.txt"), quote = F, row.names = F, col.names = F)
+```
+
+```{bash}
+# Retrieve sequencing data from NAS
+source ~/.bashrc
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --no-R --files-from=../03_output/01_processing_bulkRNAseq/featureCounts_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/01-bulk-seq_Processing/04-featureCounts \
+  ../01_data/featureCounts_output
+```
+
+```{r, eval=FALSE}
+# Only run once, to generate initial checksum files
+# Read-in loop with checksum generation
+counts <- read.delim(
+  paste0("../01_data/featureCounts_output/", 
+         sample_donor_info[1, "sample_id"], 
+         "_gene_featureCounts_output.txt"), 
+  comment.char = "#"
+)
+aggregated_counts <- data.frame(row.names = counts$Geneid)
+checksums <- list()
+
+for (i in rownames(sample_donor_info[sample_donor_info$bulk_seq == "yes", ])) {
+  sid <- sample_donor_info[i, "sample_id"]
+  counts <- read.delim(
+    paste0("../01_data/featureCounts_output/", sid, 
+           "_gene_featureCounts_output.txt"),
+    comment.char = "#"
+  )
+  
+  checksums[[sid]] <- checksum_featurecounts(counts)
+  message(paste0(sid, ": ", checksums[[sid]]))
+  
+  rownames(counts) <- counts$Geneid
+  aggregated_counts[rownames(counts), sample_donor_info[i, "donor_id"]] <- 
+    counts[, 7:ncol(counts)]
+}
+
+rownames(aggregated_counts) <- gsub("\\..*", "", rownames(aggregated_counts))
+
+# Save reference checksums
+checksum_df <- data.frame(md5 = unlist(checksums), row.names = names(checksums))
+write.csv(checksum_df, "../01_data/featureCounts_checksums.csv")
+message("Reference checksums saved to ../01_data/featureCounts_checksums.csv")
+```
+
+
+```{r, message=TRUE}
+# Read in reference checksums
+reference_checksums <- read.csv("../01_data/featureCounts_checksums.csv", 
+                                row.names = 1)
+
+# Read-in loop
+# Get list of genes from first sample to serve as row names for data frame of sample counts
+counts <- read.delim(
+  paste0("../01_data/featureCounts_output/", 
+         sample_donor_info[1, "sample_id"], 
+         "_gene_featureCounts_output.txt"), 
+  comment.char = "#"
+)
+aggregated_counts <- data.frame(row.names = counts$Geneid)
+checksums <- list()
+
+# Read in count data for each sample and add to aggregated matrix
+for (i in rownames(sample_donor_info[sample_donor_info$bulk_seq == "yes", ])) {
+  sid <- sample_donor_info[i, "sample_id"]
+  counts <- read.delim(
+    paste0("../01_data/featureCounts_output/", sid, 
+           "_gene_featureCounts_output.txt"),
+    comment.char = "#"
+  )
+  
+  # Validate before using
+  checksums[[sid]] <- validate_featurecounts(counts, sid, reference_checksums)
+  
+  rownames(counts) <- counts$Geneid
+  aggregated_counts[rownames(counts), sample_donor_info[i, "donor_id"]] <- 
+    counts[, 7:ncol(counts)]
+}
+
+rownames(aggregated_counts) <- gsub("\\..*", "", rownames(aggregated_counts))
+```
+
+```{r}
+# Format sample meta data for DESeq2
+coldata <- data.frame(
+  row.names = colnames(aggregated_counts),
+  clinical_classification = donor_info[colnames(aggregated_counts), "clinical_classification"],
+  aortic_stenosis_diagnosis = donor_info[colnames(aggregated_counts), "aortic_stenosis_diagnosis"])
+```
+
+# DESeq2
+
+## Import data into DESeq2
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = aggregated_counts,
+                              colData = coldata,
+                              design = ~ clinical_classification)
+dds <- dds[rowSums(counts(dds)) > 10, ] # Remove genes with less than 10 counts across samples
+
+# Create second DESeq2 object to run aortic stenosis vs control analysis
+dds_as <- DESeqDataSetFromMatrix(countData = aggregated_counts,
+                              colData = coldata,
+                              design = ~ aortic_stenosis_diagnosis)
+dds_as <- dds_as[rowSums(counts(dds_as)) > 10, ] # Remove genes with less than 10 counts across samples
+```
+
+## Run principal component analysis
+
+```{r}
+# Normalise counts
+vsd <- vst(dds, blind=FALSE)
+
+# Generate principal component analysis plot
+pca_plot <- plotPCA(vsd, intgroup=c("clinical_classification"))
+pca_plot
+plotPCA(vsd, intgroup=c("aortic_stenosis_diagnosis"))
+pca_plot_data <- pca_plot$data
+pca_plot_data$group <- NULL
+pca_plot_data$aortic_stenosis_diagnosis <- coldata[rownames(pca_plot_data), "aortic_stenosis_diagnosis"]
+
+# Save VSD
+saveRDS(vsd, file = paste0(output_path, "bulk_vsd.rds"))
+```
+
+# Differential gene expression analysis
+
+## Differential gene testing
+
+```{r}
+# Prepare DESeq
+dds <- DESeq(dds)
+dds_as <- DESeq(dds_as)
+
+# Run tests
+sev_v_mm <- results(dds, contrast = c("clinical_classification", "severe", "mildmoderate"))
+sev_v_ctrl <- results(dds, contrast = c("clinical_classification", "severe", "control"))
+mm_v_ctrl <- results(dds, contrast = c("clinical_classification", "mildmoderate", "control"))
+AS_v_noAS <- results(dds_as, contrast = c("aortic_stenosis_diagnosis", "AS", "noAS"))
+
+# Convert Ensembl gene to gene IDs
+genes <- rownames(dds)
+annot_file <- paste0(output_path, "ensembl_annotations.csv")
+if (file.exists(annot_file)) {
+  annot <- read.csv(annot_file)
+} else {
+  mart <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", host = "www.ensembl.org") 
+  annot <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"), filters = "ensembl_gene_id", values = genes,mart = mart)
+  write.csv(annot, annot_file, row.names = FALSE)
+}
+annot$hgnc_symbol[annot$hgnc_symbol == ""] <- annot$ensembl_gene_id
+
+# Add column with gene IDs
+sev_v_mm$ensembl_gene_id <- rownames(sev_v_mm)
+sev_v_mm <- merge(as.data.frame(sev_v_mm), annot, by = "ensembl_gene_id", all.x = TRUE)
+sev_v_ctrl$ensembl_gene_id <- rownames(sev_v_ctrl)
+sev_v_ctrl <- merge(as.data.frame(sev_v_ctrl), annot, by = "ensembl_gene_id", all.x = TRUE)
+mm_v_ctrl$ensembl_gene_id <- rownames(mm_v_ctrl)
+mm_v_ctrl <- merge(as.data.frame(mm_v_ctrl), annot, by = "ensembl_gene_id", all.x = TRUE)
+AS_v_noAS$ensembl_gene_id <- rownames(AS_v_noAS)
+AS_v_noAS <- merge(as.data.frame(AS_v_noAS), annot, by = "ensembl_gene_id", all.x = TRUE)
+sev_v_mm$hgnc_symbol[is.na(sev_v_mm$hgnc_symbol)] <- sev_v_mm$ensembl_gene_id
+sev_v_ctrl$hgnc_symbol[is.na(sev_v_ctrl$hgnc_symbol)] <- sev_v_ctrl$ensembl_gene_id
+mm_v_ctrl$hgnc_symbol[is.na(mm_v_ctrl$hgnc_symbol)] <- mm_v_ctrl$ensembl_gene_id
+AS_v_noAS$hgnc_symbol[is.na(AS_v_noAS$hgnc_symbol)] <- AS_v_noAS$ensembl_gene_id
+
+# Write DE results
+write.csv(sev_v_mm, file = paste0(output_path, "DE_sev_v_mm.csv"))
+write.csv(sev_v_ctrl, file = paste0(output_path, "DE_sev_v_ctrl.csv"))
+write.csv(mm_v_ctrl, file = paste0(output_path, "DE_mm_v_ctrl.csv"))
+write.csv(AS_v_noAS, file = paste0(output_path, "DE_AS_v_noAS.csv"))
+
+# Save DESeq2 objects
+saveRDS(dds, file = paste0(output_path, "DESeq2_condition_obj.rds"))
+saveRDS(dds_as, file = paste0(output_path, "DESeq2_as_obj.rds"))
+saveRDS(dds_as, file = paste0(output_path, "DESeq2_as_obj.rds"))
+```
+
+## Find aortic stenosis gene score
+
+```{r}
+# Subset AS v control DE for genes significantly up in AS and log 2 FC > 1
+up_genes <- subset(AS_v_noAS, padj < 0.05 & log2FoldChange > 1)$ensembl_gene_id
+
+# Get GSVA enrichment scores per sample
+gbmPar <- gsvaParam(assay(vsd), list(up_genes=up_genes), maxDiff=FALSE) 
+gbm_es <- gsva(gbmPar)
+```
+
+```{r}
+# Get principal component analysis plot with aortic stenosis gene score
+pca_plot_data$gene_score <- as.numeric(gbm_es)
+ggplot(pca_plot_data, aes(x = PC1, y = PC2, color = gene_score)) +
+  geom_point(size = 3) +
+  scale_color_scico(palette = "vik", midpoint = 0, direction = 1) +
+  theme_minimal() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+write.csv(pca_plot_data, file = paste0(output_path, "pca_data.csv"))
+```
+
+## Pathway analysis
+
+```{r}
+# Set background gene list to all genes in bulk seq data
+universe <- rownames(dds)
+
+# Pathways upregulated in severe
+ego_sev_v_ctrl <- enrichGO(gene = sev_v_ctrl[sev_v_ctrl$padj < 0.05 & !is.na(sev_v_ctrl$padj) & sev_v_ctrl$log2FoldChange > 1, "ensembl_gene_id"], universe = universe, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.05, readable = TRUE)
+write.csv(ego_sev_v_ctrl@result, file = paste0(output_path, "severe_pathways.csv"))
+
+# Pathways upregulated in control
+ego_ctrl_v_sev_or_ctrl_v_mm <- enrichGO(gene = unique(sev_v_ctrl[sev_v_ctrl$padj < 0.05 & !is.na(sev_v_ctrl$padj) & sev_v_ctrl$log2FoldChange < -1, "ensembl_gene_id"], mm_v_ctrl[mm_v_ctrl$padj < 0.05 & !is.na(mm_v_ctrl$padj) & mm_v_ctrl$log2FoldChange < -1, "ensembl_gene_id"]), universe = universe, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.05, readable = TRUE)
+write.csv(ego_ctrl_v_sev_or_ctrl_v_mm@result, file = paste0(output_path, "control_pathways.csv"))
+
+# Pathways upregulated in mild/moderate
+ego_mm_v_ctrl <- enrichGO(gene = mm_v_ctrl[mm_v_ctrl$padj < 0.05 & !is.na(mm_v_ctrl$padj) & mm_v_ctrl$log2FoldChange > 1, "ensembl_gene_id"], universe = universe, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.05, readable = TRUE)
+write.csv(ego_mm_v_ctrl@result, file = paste0(output_path, "mildmoderate_pathways.csv"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_01.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_01.csv")
+```
+
+```{r}
+package_versions <- as.data.frame(sessioninfo::package_info())
+package_versions[, intersect(c("package", "loadedversion", "date", "source"), names(package_versions))]
+```

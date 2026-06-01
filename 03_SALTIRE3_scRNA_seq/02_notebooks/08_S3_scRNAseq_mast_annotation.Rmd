@@ -1,0 +1,136 @@
+---
+title: "08: SALTIRE3 scRNA-seq Mast Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the mast cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/08_S3_scRNAseq_mast_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+mast <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/mast.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+# Mast cell cluster is small; use FindVariableFeatures rather than
+# SelectIntegrationFeatures to avoid overfitting to donor-specific genes
+mast <- harmony_cluster(mast, dims = 1:30)
+plot_cluster_umaps(mast)
+```
+
+```{r}
+plot_qc_by_cluster(mast, "RNA_snn_res.0.3")
+```
+
+```{r}
+Idents(mast) <- "RNA_snn_res.0.3"
+FAM(mast, "preqc_mast_0.3", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.3 clusters 1 (mesenchyme), 3 (myeloid), and 5 (TNK) are doublet clusters.
+
+```{r}
+dim(mast)
+mast <- subset(mast, RNA_snn_res.0.3 %in% c("1", "3", "5") | known_doublet == T, invert = T)
+dim(mast)
+```
+
+# Re-cluster after filtering
+
+```{r}
+# Regress out IEG expression artefacts in the final embedding
+mast <- harmony_cluster(mast, dims = 1:30, vars.to.regress = "percent_ieg")
+plot_cluster_umaps(mast)
+```
+
+```{r}
+plot_qc_by_cluster(mast, "RNA_snn_res.0.08", show_doublets = FALSE)
+```
+
+```{r}
+Idents(mast) <- "RNA_snn_res.0.08"
+FAM(mast, "mast_0.08", output_path = output_path)
+```
+
+```{r}
+FeaturePlot(mast, features = "KIT") + coord_equal()
+```
+
+# Annotation
+
+```{r}
+# Mast cells form a single homogeneous cluster; assign a single label
+mast$annotations_level2_readable <- "mast"
+mast$annotations_level2 <- "mastc1"
+mast$annotations_level3_readable <- "mast"
+mast$annotations_level3 <- "mastc1"
+DimPlot(mast, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Save
+
+```{r}
+saveRDS(mast, paste0(output_path, "mast.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_08.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_08.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

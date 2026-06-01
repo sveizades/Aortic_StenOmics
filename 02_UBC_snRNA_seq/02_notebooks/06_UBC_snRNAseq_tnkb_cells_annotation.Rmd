@@ -1,0 +1,139 @@
+---
+title: "06: UBC snRNA-seq T/B/NK Cell Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the T, B, and NK cell cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/06_UBC_snRNAseq_tnkb_cells_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+tnkb_cells <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/tnkb_cells.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+tnkb_cells <- harmony_cluster(tnkb_cells, dims = 1:30)
+plot_cluster_umaps(tnkb_cells)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify doublet/contaminating clusters
+plot_qc_by_cluster(tnkb_cells, "RNA_snn_res.0.3")
+```
+
+```{r}
+Idents(tnkb_cells) <- "RNA_snn_res.0.3"
+FAM(tnkb_cells, "preqc_tnkb_cells_0.3", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.2 clusters 0 and 2 are myeloid doublet clusters.
+
+```{r}
+dim(tnkb_cells)
+tnkb_cells <- subset(tnkb_cells, RNA_snn_res.0.2 %in% c("0", "2") | known_doublet == T, invert = T)
+dim(tnkb_cells)
+```
+
+# Re-cluster after filtering
+
+```{r}
+# Use SelectIntegrationFeatures after filtering to stabilise variable gene selection
+tnkb_cells <- harmony_cluster(tnkb_cells, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(tnkb_cells)
+```
+
+```{r}
+# Confirm QC metrics are clean after filtering
+plot_qc_by_cluster(tnkb_cells, "RNA_snn_res.0.06", show_doublets = FALSE)
+```
+
+```{r}
+Idents(tnkb_cells) <- "RNA_snn_res.0.06"
+FAM(tnkb_cells, "tnkb_cells_0.06", output_path = output_path)
+```
+
+# Annotation
+
+```{r}
+# Broad T/NK/B grouping at resolution 0.06
+tnkb_cells$annotations_level1 <- ""
+tnkb_cells$annotations_level1[tnkb_cells$RNA_snn_res.0.06 == "0"] <- "T_cell"
+tnkb_cells$annotations_level1[tnkb_cells$RNA_snn_res.0.06 == "1"] <- "NK_cell"
+tnkb_cells$annotations_level1[tnkb_cells$RNA_snn_res.0.06 == "2"] <- "B_cell"
+DimPlot(tnkb_cells, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+
+# Fine-grained sequential cluster labels
+tnkb_cells$annotations_level2 <- paste0("TNKBn", as.numeric(tnkb_cells$RNA_snn_res.0.06))
+tnkb_cells$annotations_level2 <- factor(tnkb_cells$annotations_level2, levels = sort(unique(tnkb_cells$annotations_level2)))
+DimPlot(tnkb_cells, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+Idents(tnkb_cells) <- "annotations_level2"
+FAM(tnkb_cells, "tnkb_cells_annotations_level2", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(tnkb_cells, paste0(output_path, "tnkb_cells.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_06.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_06.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

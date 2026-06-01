@@ -1,0 +1,168 @@
+Name,Classification,Area µm^2,CNN1: CNN1+ area µm^2,FAP: FAP+ area µm^2
+B6BO0-1 Inner nodule 100 µm,Inner Nodule,2845441.2,8515.8604,72053
+BIGDK-1 Inner nodule 100 µm,Inner Nodule,1179180.1,3655.8992,25336.9707
+BIGDK-2 Inner nodule 100 µm,Inner Nodule,817133.6,818.6035,9497.3896
+BIGDK-3 Inner nodule 100 µm,Inner Nodule,2073040.1,3600.2659,23505.0469
+BIGDK-4 Inner nodule 100 µm,Inner Nodule,6064333.9,4927.5161,18549.7148
+BIGDK-5 Inner nodule 100 µm,Inner Nodule,2045651.4,389.4327,18144.3867
+BIYTC-1 Inner nodule 100 µm,Inner Nodule,48711,0,309.9567
+BIYTC-2 Inner nodule 100 µm,Inner Nodule,9765250.9,123.1879,169268.125
+BIYTC-3 Inner nodule 100 µm,Inner Nodule,3838624.8,67.5547,30018.1113
+BIYTC-4 Inner nodule 100 µm,Inner Nodule,4746300.9,0,52505.8633
+BR11G-3 Inner nodule 100 µm,Inner Nodule,11519807.8,23811.0293,62372.8164
+BR11G-4 Inner nodule 100 µm,Inner Nodule,2816480,8400.6201,3226.7283
+BRGO9-1 Inner nodule 100 µm,Inner Nodule,6645384.8,910.001,156758.5938
+BRGO9-2 Inner nodule 100 µm,Inner Nodule,13355255.1,94838.7891,316457.8125
+BRGO9-3 Inner nodule 100 µm,Inner Nodule,22616338.7,18176.1758,92482.3281
+BRGO9-4 Inner nodule 100 µm,Inner Nodule,11775430.8,83.4499,0
+BTNTF-2 Inner nodule 100 µm,Inner Nodule,277270,655.6776,12358.5283
+BTNTF-3 Inner nodule 100 µm,Inner Nodule,1035903.2,945.7652,17909.9316
+BX85M-1 Inner nodule 100 µm,Inner Nodule,771003.2,858.3416,15605.126
+BX85M-3 Inner nodule 100 µm,Inner Nodule,1562697.4,1172.272,25301.207
+BZX0D-1 Inner nodule 100 µm,Inner Nodule,6566349.6,22416.2246,73924.6641
+BZX0D-2 Inner nodule 100 µm,Inner Nodule,3818889.2,10852.457,27466.9297
+BZX0D-3 Inner nodule 100 µm,Inner Nodule,35896.9,0,0
+B6BO0-1 Inner Rim 100 µm,Inner Rim,1451647.6,2197.5132,40846.7266
+BIGDK-1 Inner Rim 100 µm,Inner Rim,979416.1,325.8519,66342.6484
+BIGDK-2 Inner Rim 100 µm,Inner Rim,701516,993.4509,18811.9844
+BIGDK-3 Inner Rim 100 µm,Inner Rim,1496704.5,3147.2522,36022.5273
+BIGDK-4 Inner Rim 100 µm,Inner Rim,1565431.4,345.7209,9926.5605
+BIGDK-5 Inner Rim 100 µm,Inner Rim,1414936.4,699.3894,26060.2031
+BIYTC-1 Inner Rim 100 µm,Inner Rim,304361.8,35.7642,3449.2612
+BIYTC-2 Inner Rim 100 µm,Inner Rim,2325956.7,329.8257,161407.9531
+BIYTC-3 Inner Rim 100 µm,Inner Rim,959660.9,3.9738,42487.9062
+BIYTC-4 Inner Rim 100 µm,Inner Rim,2436639.1,0,94000.3203
+BR11G-3 Inner Rim 100 µm,Inner Rim,4242780.2,5309.0015,99647.0938
+BR11G-4 Inner Rim 100 µm,Inner Rim,2570975.9,5785.8579,13427.4814
+BRGO9-1 Inner Rim 100 µm,Inner Rim,2307807.2,2424.02,206657.6406
+BRGO9-2 Inner Rim 100 µm,Inner Rim,1926016.1,18811.9844,101796.9219
+BRGO9-3 Inner Rim 100 µm,Inner Rim,2029089.1,464.935,22813.6055
+BRGO9-4 Inner Rim 100 µm,Inner Rim,1428472.7,0,3.9738
+BTNTF-2 Inner Rim 100 µm,Inner Rim,404775,607.9919,35271.4805
+BTNTF-3 Inner Rim 100 µm,Inner Rim,493620.1,520.5682,18684.8242
+BX85M-1 Inner Rim 100 µm,Inner Rim,497077.4,210.6116,25837.6699
+BX85M-3 Inner Rim 100 µm,Inner Rim,857349.9,302.0091,52446.2578
+BX85M-4 Inner Rim 100 µm,Inner Rim,23572.5,0,63.5809
+BZX0D-1 Inner Rim 100 µm,Inner Rim,1238604.5,8523.8086,66906.9297
+BZX0D-2 Inner Rim 100 µm,Inner Rim,1004167.2,309.9567,21863.8672
+BZX0D-3 Inner Rim 100 µm,Inner Rim,116247.5,0,23.8428
+B6BO0-1 Nodular Tissue,Nodular Tissue,3856112.3,3512.8423,72188.1094
+BIGDK-1 Nodular Tissue,Nodular Tissue,1963698.1,3969.8296,51957.4805
+BIGDK-2 Nodular Tissue,Nodular Tissue,1476539.7,1812.0543,22905.002
+BIGDK-3 Nodular Tissue,Nodular Tissue,3407906.5,4446.686,42809.7852
+BIGDK-4 Nodular Tissue,Nodular Tissue,7119547,1363.0145,21557.8828
+BIGDK-5 Nodular Tissue,Nodular Tissue,3257825.3,1001.3984,27435.1387
+BIYTC-1 Nodular Tissue,Nodular Tissue,343833.7,35.7642,3123.4094
+BIYTC-2 Nodular Tissue,Nodular Tissue,11659794.6,389.4327,280204.8125
+BIYTC-3 Nodular Tissue,Nodular Tissue,4658172.6,47.6856,62738.4062
+BIYTC-4 Nodular Tissue,Nodular Tissue,6744633.6,0,132752.8438
+BR11G-3 Nodular Tissue,Nodular Tissue,14572365.6,22388.4082,139961.3281
+BR11G-4 Nodular Tissue,Nodular Tissue,4746377.9,13872.5479,12028.7031
+BRGO9-1 Nodular Tissue,Nodular Tissue,8778088.2,3274.4141,327294.375
+BRGO9-2 Nodular Tissue,Nodular Tissue,14351055.4,98518.5312,360324.625
+BRGO9-3 Nodular Tissue,Nodular Tissue,24048681.6,11261.7588,104165.3047
+BRGO9-4 Nodular Tissue,Nodular Tissue,12740619.6,83.4499,3.9738
+BTNTF-2 Nodular Tissue,Nodular Tissue,607066.7,838.4725,37643.8398
+BTNTF-3 Nodular Tissue,Nodular Tissue,1433426.4,711.3108,31329.4668
+BX85M-1 Nodular Tissue,Nodular Tissue,1091307.5,258.2972,28845.8398
+BX85M-3 Nodular Tissue,Nodular Tissue,2134132.6,921.9224,36455.6719
+BX85M-4 Nodular Tissue,Nodular Tissue,18974.9,0,63.5809
+BZX0D-1 Nodular Tissue,Nodular Tissue,7674318.6,20345.873,121495.0625
+BZX0D-2 Nodular Tissue,Nodular Tissue,4600906.3,7578.043,43970.1328
+BZX0D-3 Nodular Tissue,Nodular Tissue,151068.1,0,23.8428
+B6BO0-1 Non‑Nodular Tissue,Non-Nodular Tissue,14453479.5,239342.1719,419816.4375
+BIGDK-1 Non‑Nodular Tissue,Non-Nodular Tissue,7735925.9,46302.7578,339891.3125
+BIGDK-2 Non‑Nodular Tissue,Non-Nodular Tissue,6596128.4,34377.375,211708.3438
+BIGDK-3 Non‑Nodular Tissue,Non-Nodular Tissue,8126928.2,18458.3164,323376.1875
+BIGDK-4 Non‑Nodular Tissue,Non-Nodular Tissue,10606323.9,16328.3584,110253.1719
+BIGDK-5 Non‑Nodular Tissue,Non-Nodular Tissue,7510753.3,7736.9951,130638.7891
+BIYTC-1 Non‑Nodular Tissue,Non-Nodular Tissue,4755727.3,1335.198,97668.1406
+BIYTC-2 Non‑Nodular Tissue,Non-Nodular Tissue,14122118.6,50228.875,759779.3125
+BIYTC-3 Non‑Nodular Tissue,Non-Nodular Tissue,15862766.8,35092.6562,351216.6562
+BIYTC-4 Non‑Nodular Tissue,Non-Nodular Tissue,15928190.1,7844.2881,621550.5625
+BR11G-3 Non‑Nodular Tissue,Non-Nodular Tissue,28419590.4,445745.5,400126.25
+BR11G-4 Non‑Nodular Tissue,Non-Nodular Tissue,14853019.9,20314.082,82500.1328
+BRGO9-1 Non‑Nodular Tissue,Non-Nodular Tissue,4737878,11301.4971,209208.8281
+BRGO9-2 Non‑Nodular Tissue,Non-Nodular Tissue,12524637.7,146657.1875,134759.625
+BRGO9-3 Non‑Nodular Tissue,Non-Nodular Tissue,10840888.5,83815.4609,15517.7021
+BRGO9-4 Non‑Nodular Tissue,Non-Nodular Tissue,12425202,4406.9478,135.1093
+BTNTF-2 Non‑Nodular Tissue,Non-Nodular Tissue,11163438.1,40993.7578,153341.125
+BTNTF-3 Non‑Nodular Tissue,Non-Nodular Tissue,7503363.9,11730.668,140899.1406
+BX85M-1 Non‑Nodular Tissue,Non-Nodular Tissue,4605656.5,14571.9375,166315.5938
+BX85M-3 Non‑Nodular Tissue,Non-Nodular Tissue,9457462.7,30928.1113,201026.7656
+BX85M-4 Non‑Nodular Tissue,Non-Nodular Tissue,9154723.7,4748.6948,5881.229
+BZX0D-1 Non‑Nodular Tissue,Non-Nodular Tissue,7916892.6,38323.3594,984803.875
+BZX0D-2 Non‑Nodular Tissue,Non-Nodular Tissue,8478537.1,141717.75,68993.1719
+BZX0D-3 Non‑Nodular Tissue,Non-Nodular Tissue,5574375.8,1251.748,20930.0234
+B6BO0-1 Other Tissue,Other Tissue,12632696.7,227536.0156,325005.4688
+BIGDK-1 Other Tissue,Other Tissue,6650689.6,46266.9922,150388.5938
+BIGDK-2 Other Tissue,Other Tissue,5984889.8,34198.5508,137791.6406
+BIGDK-3 Other Tissue,Other Tissue,6505596,16654.2109,167289.1719
+BIGDK-4 Other Tissue,Other Tissue,8994564.8,15915.083,79170.0859
+BIGDK-5 Other Tissue,Other Tissue,6108659.5,7450.8813,52867.4805
+BIYTC-1 Other Tissue,Other Tissue,4559069.2,1279.5647,69887.2812
+BIYTC-2 Other Tissue,Other Tissue,11439054.9,45873.5859,506993.7188
+BIYTC-3 Other Tissue,Other Tissue,14697084.3,34965.4961,307020.0312
+BIYTC-4 Other Tissue,Other Tissue,13076278.8,7494.5933,469238.625
+BR11G-3 Other Tissue,Other Tissue,24174520.3,429806.5625,319346.75
+BR11G-4 Other Tissue,Other Tissue,12371474.9,17520.5,61677.4023
+BRGO9-1 Other Tissue,Other Tissue,3949567.2,9910.666,130714.2891
+BRGO9-2 Other Tissue,Other Tissue,9887758.6,121244.7188,62881.4648
+BRGO9-3 Other Tissue,Other Tissue,8549616.5,82762.4062,2213.4084
+BRGO9-4 Other Tissue,Other Tissue,10814766.7,4406.9478,135.1093
+BTNTF-2 Other Tissue,Other Tissue,10617155.7,40993.7578,113523.6172
+BTNTF-3 Other Tissue,Other Tissue,7021493.7,11154.4658,122003.7109
+BX85M-1 Other Tissue,Other Tissue,4118622.1,13193.0273,102083.0391
+BX85M-3 Other Tissue,Other Tissue,8533458.4,30467.1504,84491.0078
+BX85M-4 Other Tissue,Other Tissue,8997122,4748.6948,5030.835
+BZX0D-1 Other Tissue,Other Tissue,6517000.6,32831.5625,655681.5625
+BZX0D-2 Other Tissue,Other Tissue,7538433.2,141189.2344,41621.6172
+BZX0D-3 Other Tissue,Other Tissue,5389749.2,1251.748,19113.9941
+B6BO0-1 Outer Rim 100 µm,Outer Rim,1499637.2,11051.1475,78287.8984
+BIGDK-1 Outer Rim 100 µm,Outer Rim,896362.5,23.8428,149641.5156
+BIGDK-2 Outer Rim 100 µm,Outer Rim,576874.1,178.8212,68452.7344
+BIGDK-3 Outer Rim 100 µm,Outer Rim,1480847.9,1728.6045,141379.9844
+BIGDK-4 Outer Rim 100 µm,Outer Rim,1513612.4,409.3018,28277.5859
+BIGDK-5 Outer Rim 100 µm,Outer Rim,1200649.6,198.6902,60981.9883
+BIYTC-1 Outer Rim 100 µm,Outer Rim,187637.4,55.6332,27323.873
+BIYTC-2 Outer Rim 100 µm,Outer Rim,2268001.8,4291.7075,212002.4062
+BIYTC-3 Outer Rim 100 µm,Outer Rim,1042376.6,103.3189,36880.8711
+BIYTC-4 Outer Rim 100 µm,Outer Rim,2422000.6,349.6947,138487.0469
+BR11G-3 Outer Rim 100 µm,Outer Rim,3204771.2,15287.2217,62563.5625
+BR11G-4 Outer Rim 100 µm,Outer Rim,1945111.6,2483.6272,16145.5635
+BRGO9-1 Outer Rim 100 µm,Outer Rim,664817.9,1390.8312,56567.0898
+BRGO9-2 Outer Rim 100 µm,Outer Rim,1949350,21724.7832,45424.5469
+BRGO9-3 Outer Rim 100 µm,Outer Rim,1816789.5,993.4509,7538.3052
+BRGO9-4 Outer Rim 100 µm,Outer Rim,1302538.7,0,0
+BTNTF-2 Outer Rim 100 µm,Outer Rim,483437.9,0,32958.7266
+BTNTF-3 Outer Rim 100 µm,Outer Rim,426124.4,576.2015,16618.4453
+BX85M-1 Outer Rim 100 µm,Outer Rim,371607.4,1378.9098,54492.7656
+BX85M-3 Outer Rim 100 µm,Outer Rim,669369.7,456.9874,78415.0625
+BX85M-4 Outer Rim 100 µm,Outer Rim,152911.8,0,850.3939
+BZX0D-1 Outer Rim 100 µm,Outer Rim,1369340.1,5467.9536,328248.0938
+BZX0D-2 Outer Rim 100 µm,Outer Rim,888985.3,456.9874,26135.7051
+BZX0D-3 Outer Rim 100 µm,Outer Rim,183403.9,0,1816.0282
+B6BO0-1 Tissue After Subtraction,Tissue After Subtraction,18309591.8,242855.0156,492004.5312
+BIGDK-1 Tissue After Subtraction,Tissue After Subtraction,9699624,50272.5859,391848.8125
+BIGDK-2 Tissue After Subtraction,Tissue After Subtraction,8072668.1,36189.4258,234613.3594
+BIGDK-3 Tissue After Subtraction,Tissue After Subtraction,11534834.7,22905.002,366185.9688
+BIGDK-4 Tissue After Subtraction,Tissue After Subtraction,17725870.8,17691.373,131811.0625
+BIGDK-5 Tissue After Subtraction,Tissue After Subtraction,10768578.6,8738.3936,158073.9219
+BIYTC-1 Tissue After Subtraction,Tissue After Subtraction,5099561,1370.9622,100791.5469
+BIYTC-2 Tissue After Subtraction,Tissue After Subtraction,25781913.2,50618.3086,1039984.063
+BIYTC-3 Tissue After Subtraction,Tissue After Subtraction,20520939.4,35140.3438,413955.0625
+BIYTC-4 Tissue After Subtraction,Tissue After Subtraction,22672823.7,7844.2881,754303.375
+BR11G-3 Tissue After Subtraction,Tissue After Subtraction,42991956,468133.9062,540087.5625
+BR11G-4 Tissue After Subtraction,Tissue After Subtraction,19599397.7,34186.6289,94528.8359
+BRGO9-1 Tissue After Subtraction,Tissue After Subtraction,13515966.2,14575.9111,536503.1875
+BRGO9-2 Tissue After Subtraction,Tissue After Subtraction,26875693.1,245175.7188,495084.25
+BRGO9-3 Tissue After Subtraction,Tissue After Subtraction,34889570.1,95077.2188,119683.0078
+BRGO9-4 Tissue After Subtraction,Tissue After Subtraction,25165821.6,4490.3979,139.0831
+BTNTF-2 Tissue After Subtraction,Tissue After Subtraction,11770504.8,41832.2266,190984.9688
+BTNTF-3 Tissue After Subtraction,Tissue After Subtraction,8936790.2,12441.9785,172228.6094
+BX85M-1 Tissue After Subtraction,Tissue After Subtraction,5696964,14830.2344,195161.4375
+BX85M-3 Tissue After Subtraction,Tissue After Subtraction,11591595.2,31850.0352,237482.4375
+BX85M-4 Tissue After Subtraction,Tissue After Subtraction,9173698.7,4748.6948,5944.8101
+BZX0D-1 Tissue After Subtraction,Tissue After Subtraction,15591211.2,58669.2344,1106298.875
+BZX0D-2 Tissue After Subtraction,Tissue After Subtraction,13079443.4,149295.7969,112963.3125
+BZX0D-3 Tissue After Subtraction,Tissue After Subtraction,5725443.9,1251.748,20953.8652

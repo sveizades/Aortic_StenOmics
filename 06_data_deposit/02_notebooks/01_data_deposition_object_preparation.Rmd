@@ -1,0 +1,1144 @@
+---
+title: "01: Data Deposition Object Preparation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to clean objects for deposition.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(anndataR)
+library(readxl)
+library(SingleCellExperiment)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(DropletUtils)
+library(Matrix)
+library(readr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_data_deposition_object_preparation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+```{r}
+patient_information <- read_excel("../../00_study_design/patient_information.xlsx")
+```
+
+# snRNA-seq
+
+## Valvular interstitial cells
+
+```{r}
+snRNAseq_vics <- readRDS("../../02_UBC_snRNA_seq/03_output/04_UBC_snRNAseq_vic_annotation/vics_magic.rds")
+```
+
+```{r}
+head(snRNAseq_vics@meta.data)
+```
+
+```{r}
+cols_keep <- c(
+  "nCount_RNA", "nFeature_RNA", "percent_mito", "percent_ribo", "percent_mito_ribo", "log10GenesPerUMI", "percent_top50", "percent_oxphos","percent_apop", "percent_dna_repair", "percent_ieg","ieg_score1", "percent_hemo","percent_lncRNA",
+  "S.Score", "G2M.Score", "Phase",
+  "pool_id", "donor_id", "clinical_classification_readable",
+  "annotations_level1", "annotations_level2_readable"
+)
+
+snRNAseq_vics@meta.data <- snRNAseq_vics@meta.data[, cols_keep]
+
+# Rename for depositors
+colnames(snRNAseq_vics@meta.data)[colnames(snRNAseq_vics@meta.data) == "clinical_classification_readable"] <- "clinical_classification"
+colnames(snRNAseq_vics@meta.data)[colnames(snRNAseq_vics@meta.data) == "annotations_level2_readable"] <- "annotations_level2"
+colnames(snRNAseq_vics@meta.data)[colnames(snRNAseq_vics@meta.data) == "annotations_level1"] <- "annotations_level1"
+snRNAseq_vics$annotations_level1 <- "Valvular interstitial cell"
+
+snRNAseq_vics$development_stage_ontology_term_id  <- "HsapDv:0000258"
+snRNAseq_vics$self_reported_ethnicity_ontology_term_id <- "unknown"
+snRNAseq_vics$sex_ontology_term_id <- plyr::mapvalues(plyr::mapvalues(snRNAseq_vics$donor_id, from = patient_information$donor_id, to = patient_information$RNA_defined_sex), from = c("male", "female"), to = c("PATO:0000384", "PATO:0000383"))
+snRNAseq_vics$self_reported_ethnicity_ontology_term_id <- "unknown"
+snRNAseq_vics$disease_ontology_term_id <- plyr::mapvalues(snRNAseq_vics$clinical_classification, from = c("Control", "Mild/moderate", "Severe"), to = c("PATO:0000461", "MONDO:0042981", "MONDO:0042981"))
+snRNAseq_vics$tissue_type <- "tissue"
+snRNAseq_vics$tissue_ontology_term_id <- "UBERON:0002137"
+snRNAseq_vics$cell_type_ontology_term_id <- "CL:4030032"
+snRNAseq_vics$assay_ontology_term_id <- "EFO:0009900"
+snRNAseq_vics$suspension_type <- "nucleus"
+
+head(snRNAseq_vics@meta.data)
+
+snRNAseq_vics@commands <- list()
+snRNAseq_vics
+```
+
+```{r}
+vic_sce <- readRDS("../../02_UBC_snRNA_seq/03_output/12_UBC_snRNAseq_vic_velocity/vics_sce_slingshot.rds")
+
+fa_coords <- reducedDim(vic_sce, "FA")
+head(fa_coords)
+
+all(rownames(fa_coords) %in% colnames(snRNAseq_vics))
+all(colnames(snRNAseq_vics) %in% rownames(fa_coords))
+
+snRNAseq_vics[["fa"]] <- CreateDimReducObject(
+  embeddings = fa_coords[colnames(snRNAseq_vics), ],
+  key = "FA_",
+  assay = "RNA"
+)
+
+DimPlot(snRNAseq_vics, reduction = "fa", group.by = "annotations_level2", cols = UBC_atlas_colours_vics)+coord_equal()
+```
+
+```{r}
+snRNAseq_vics_export <- snRNAseq_vics
+snRNAseq_vics_export[["RNA3"]] <- as(object = snRNAseq_vics_export[["RNA"]], Class = "Assay")
+DefaultAssay(snRNAseq_vics_export) <- "RNA3"
+snRNAseq_vics_export[["RNA"]] <- NULL
+snRNAseq_vics_export <- RenameAssays(object = snRNAseq_vics_export, RNA3 = 'RNA')
+anndataR::write_h5ad(snRNAseq_vics_export, paste0(output_path, "snRNAseq_vics.h5ad"), mode = "w")
+saveRDS(snRNAseq_vics, paste0(output_path, "snRNAseq_vics.rds"))
+rm(snRNAseq_vics, snRNAseq_vics_export, vic_sce)
+gc()
+```
+
+## Full atlas
+
+```{r}
+snRNAseq_atlas <- readRDS("../../02_UBC_snRNA_seq/03_output/11_UBC_snRNAseq_annotation_combining/atlas.rds")
+```
+
+```{r}
+head(snRNAseq_atlas@meta.data)
+```
+
+```{r}
+cols_keep <- c(
+  "nCount_RNA", "nFeature_RNA", "percent_mito", "percent_ribo", "percent_mito_ribo", "log10GenesPerUMI", "percent_top50", "percent_oxphos","percent_apop", "percent_dna_repair", "percent_ieg","ieg_score1", "percent_hemo","percent_lncRNA",
+  "S.Score", "G2M.Score", "Phase",
+  "pool_id", "donor_id", "clinical_classification_readable",
+  "annotations_level1", "annotations_level2_readable"
+)
+
+snRNAseq_atlas@meta.data <- snRNAseq_atlas@meta.data[, cols_keep]
+
+snRNAseq_atlas$cell_type_ontology_term_id <- ""
+snRNAseq_atlas$cell_type_ontology_term_id[snRNAseq_atlas$annotations_level2_readable == "proliferating-mesenchymal"] <- "CL:4047001"
+snRNAseq_atlas$cell_type_ontology_term_id[snRNAseq_atlas$annotations_level2_readable == "proliferating-immune"] <- "CL:4033081"
+
+# Rename for depositors
+colnames(snRNAseq_atlas@meta.data)[colnames(snRNAseq_atlas@meta.data) == "clinical_classification_readable"] <- "clinical_classification"
+colnames(snRNAseq_atlas@meta.data)[colnames(snRNAseq_atlas@meta.data) == "annotations_level2_readable"] <- "annotations_level2"
+colnames(snRNAseq_atlas@meta.data)[colnames(snRNAseq_atlas@meta.data) == "annotations_level1"] <- "annotations_level1"
+snRNAseq_atlas$annotations_level1 <- plyr::mapvalues(snRNAseq_atlas$annotations_level1, from = c("vics","myeloid","B_cell","T_cell","NK_cell","endothelial","adipocytes","mast","proliferating"), to = c("Valvular interstitial cell", 'Myeloid', 'B cell', 'T cell', 'NK cell', 'Endothelial cell', 'Adipocyte', 'Granulocyte', 'Proliferating'))
+snRNAseq_atlas$annotations_level2[snRNAseq_atlas$annotations_level1 == "Valvular interstitial cell"] <- plyr::mapvalues(snRNAseq_atlas$annotations_level2[snRNAseq_atlas$annotations_level1 == "Valvular interstitial cell"], from = as.character(VIC_celltype_names), to = names(VIC_celltype_names))
+snRNAseq_atlas$annotations_level2[snRNAseq_atlas$annotations_level1 != "Valvular interstitial cell"] <- snRNAseq_atlas$annotations_level1[snRNAseq_atlas$annotations_level1 != "Valvular interstitial cell"]
+
+snRNAseq_atlas$development_stage_ontology_term_id  <- "HsapDv:0000258"
+snRNAseq_atlas$self_reported_ethnicity_ontology_term_id <- "unknown"
+snRNAseq_atlas$sex_ontology_term_id <- plyr::mapvalues(plyr::mapvalues(snRNAseq_atlas$donor_id, from = patient_information$donor_id, to = patient_information$RNA_defined_sex), from = c("male", "female"), to = c("PATO:0000384", "PATO:0000383"))
+snRNAseq_atlas$self_reported_ethnicity_ontology_term_id <- "unknown"
+snRNAseq_atlas$disease_ontology_term_id <- plyr::mapvalues(snRNAseq_atlas$clinical_classification, from = c("Control", "Mild/moderate", "Severe"), to = c("PATO:0000461", "MONDO:0042981", "MONDO:0042981"))
+snRNAseq_atlas$tissue_type <- "tissue"
+snRNAseq_atlas$tissue_ontology_term_id <- "UBERON:0002137"
+snRNAseq_atlas$cell_type_ontology_term_id[snRNAseq_atlas$cell_type_ontology_term_id == ""] <- plyr::mapvalues(snRNAseq_atlas$annotations_level1[snRNAseq_atlas$cell_type_ontology_term_id == ""], from = c("Valvular interstitial cell", 'Myeloid', 'B cell', 'T cell', 'NK cell', 'Endothelial cell', 'Adipocyte', 'Granulocyte'), to = c("CL:4030032", "CL:0000763", "CL:0000236", "CL:0000084", "CL:0000623", "CL:4030033", "CL:0000136", "CL:0000094"))
+
+snRNAseq_atlas$assay_ontology_term_id <- "EFO:0009900"
+snRNAseq_atlas$suspension_type <- "nucleus"
+
+head(snRNAseq_atlas@meta.data)
+
+snRNAseq_atlas@commands <- list()
+snRNAseq_atlas
+
+DimPlot(snRNAseq_atlas, group.by = "annotations_level1", cols = "polychrome")+coord_equal()
+DimPlot(snRNAseq_atlas, group.by = "annotations_level2", cols = "polychrome")+coord_equal()
+DimPlot(snRNAseq_atlas, group.by = "cell_type_ontology_term_id", cols = "polychrome")+coord_equal()
+```
+
+```{r}
+# Write variable-gene count matrix for MAGIC imputation (run in Python)
+magic_genes <- VariableFeatures(snRNAseq_atlas)
+write10xCounts(
+  path     = paste0(output_path, "snRNAseq_atlas_magic_input"),
+  x        = snRNAseq_atlas@assays$RNA@layers$counts[which(rownames(snRNAseq_atlas) %in% magic_genes), ],
+  barcodes = colnames(snRNAseq_atlas),
+  gene.id  = rownames(snRNAseq_atlas)[which(rownames(snRNAseq_atlas) %in% magic_genes)],
+  overwrite = T
+)
+```
+
+```{r}
+# Set up reticulate to use MAGIC mamba environment
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+```
+
+```{python}
+# Run MAGIC on VIC object
+import magic
+import scprep
+import numpy as np
+import pandas as pd
+
+vicnuc_data = scprep.io.load_10X("../03_output/01_data_deposition_object_preparation/snRNAseq_atlas_magic_input")
+vicnuc_data = scprep.normalize.library_size_normalize(vicnuc_data)
+vicnuc_data = scprep.transform.sqrt(vicnuc_data)
+magic_operator = magic.MAGIC(random_state=42)
+vicnuc_magic = magic_operator.fit_transform(vicnuc_data)
+vicnuc_magic.to_csv("../03_output/01_data_deposition_object_preparation/snRNAseq_atlas_magic_output.csv")
+```
+
+```{r}
+# Load MAGIC-imputed matrix and store as a separate assay for downstream use
+snRNAseq_atlas_magic <- read.csv(paste0(output_path, "snRNAseq_atlas_magic_output.csv"), row.names = 1)
+snRNAseq_atlas[["MAGIC"]] <- CreateAssayObject(data = t(snRNAseq_atlas_magic))
+rm(snRNAseq_atlas)
+```
+
+```{r}
+snRNAseq_atlas_export <- snRNAseq_atlas
+snRNAseq_atlas_export[["RNA3"]] <- as(object = snRNAseq_atlas_export[["RNA"]], Class = "Assay")
+DefaultAssay(snRNAseq_atlas_export) <- "RNA3"
+snRNAseq_atlas_export[["RNA"]] <- NULL
+snRNAseq_atlas_export <- RenameAssays(object = snRNAseq_atlas_export, RNA3 = 'RNA')
+anndataR::write_h5ad(snRNAseq_atlas_export, paste0(output_path, "snRNAseq_atlas.h5ad"), mode = "w")
+saveRDS(snRNAseq_atlas, paste0(output_path, "snRNAseq_atlas.rds"))
+rm(snRNAseq_atlas_export, snRNAseq_atlas)
+gc()
+```
+
+# scRNA-seq
+
+## Full atlas
+
+```{r}
+scRNAseq_atlas <- readRDS("../../03_SALTIRE3_scRNA_seq/03_output/10_S3_scRNAseq_annotations_combining/merged_objects.rds")
+```
+
+```{r}
+head(scRNAseq_atlas@meta.data)
+```
+
+```{r}
+cols_keep <- c(
+  "nCount_RNA", "nFeature_RNA", "percent_mito", "percent_ribo", "percent_mito_ribo", "log10GenesPerUMI", "percent_top50", "percent_oxphos","percent_apop", "percent_dna_repair", "percent_ieg","ieg_score1", "percent_hemo","percent_lncRNA",
+  "S.Score", "G2M.Score", "Phase",
+  "pool_id", "donor_id", "sample_id", "assay",
+  "annotations_level1_readable", "annotations_level2_readable","annotations_level3_readable"
+)
+
+scRNAseq_atlas@meta.data <- scRNAseq_atlas@meta.data[, cols_keep]
+
+# Rename for depositors
+colnames(scRNAseq_atlas@meta.data)[colnames(scRNAseq_atlas@meta.data) == "annotations_level1_readable"] <- "annotations_level1"
+colnames(scRNAseq_atlas@meta.data)[colnames(scRNAseq_atlas@meta.data) == "annotations_level2_readable"] <- "annotations_level2"
+colnames(scRNAseq_atlas@meta.data)[colnames(scRNAseq_atlas@meta.data) == "annotations_level3_readable"] <- "annotations_level3"
+
+scRNAseq_atlas$development_stage_ontology_term_id  <- "HsapDv:0000258"
+scRNAseq_atlas$self_reported_ethnicity_ontology_term_id <- "unknown"
+scRNAseq_atlas$sex_ontology_term_id <- plyr::mapvalues(plyr::mapvalues(scRNAseq_atlas$donor_id, from = patient_information$donor_id, to = patient_information$RNA_defined_sex), from = c("male", "female"), to = c("PATO:0000384", "PATO:0000383"))
+scRNAseq_atlas$self_reported_ethnicity_ontology_term_id <- "unknown"
+scRNAseq_atlas$disease_ontology_term_id <- "MONDO:0042981"
+scRNAseq_atlas$tissue_type <- "tissue"
+scRNAseq_atlas$tissue_ontology_term_id <- "UBERON:0002137"
+scRNAseq_atlas$assay_ontology_term_id <- plyr::mapvalues(scRNAseq_atlas$assay, from = c("scC5pV2", "scC5pV3OCM"), to = c("EFO:0009900", "EFO:0022605"))
+
+scRNAseq_atlas$suspension_type <- "cell"
+
+head(scRNAseq_atlas@meta.data)
+
+scRNAseq_atlas@commands <- list()
+scRNAseq_atlas
+```
+
+```{r}
+# Cell Ontology mapping for annotations_level3_readable
+cl_mapping <- tribble(
+  ~annotations_level3_readable,       ~cell_type_ontology_term_id,
+
+  # VICs
+  "VIC-transitional",                 "CL:4030032",
+  "VIC-FAP-osteogenic",               "CL:4030032",
+  "VIC-quiescent",                    "CL:4030032",
+  "VIC-spongiosa",                    "CL:4030032",
+  "VIC-neural-crest",                 "CL:4030032",
+  "VIC-contractile",                  "CL:4030032",
+  "VIC-IFN",                          "CL:4030032",
+  "VIC-cycling",                      "CL:4047001",
+
+  # VECs
+  "VEC-endocardial",                  "CL:0002350",
+  "VEC-venous",                       "CL:0002543",
+  "VEC-lymphatic",                    "CL:0002138",
+  "VEC-activated",                    "CL:4030033",
+  "VEC-arterial",                     "CL:1000413",
+  "VEC-capillary",                    "CL:0002144",
+
+  # T / NK cells
+  "T-CD4-Th1",                        "CL:0000545",
+  "T-CD8-EM",                         "CL:0000913",
+  "T-CD4-Treg",                       "CL:0000815",
+  "T-CD4-EM",                         "CL:0000905",
+  "T-CD4-Th17",                       "CL:0000899",
+  "T-cycling",                        "CL:4033069",
+  "NK-CD56-dim",                      "CL:0000939",
+  "T-CD4-naive",                      "CL:0000895",
+  "T-CD8-MAIT",                       "CL:0000940",
+  "NK-CD56-bright",                   "CL:0000938",
+  "T-gd-V9",                          "CL:0000798",
+  "T-CD8-cyto",                       "CL:0000794",
+  "T-CD4-cyto",                       "CL:0000934",
+  "T-gd-cyto",                        "CL:0000798",
+  "NK-cycling",                       "CL:4033071",
+  # Myeloid cells
+  "cDC2",                             "CL:0002399",
+  "cDC1",                             "CL:0002394",
+  "Scar-associated macrophage",       "CL:4047053",
+  "Classical monocyte",               "CL:0000860",
+  "Resident activated macrophage",    "CL:0000864",
+  "Resident macrophage",              "CL:0000864",
+  "Non-classical monocyte",           "CL:0000875",
+  "moDC",                             "CL:0011031",
+  "IFN-stimulated macrophage",        "CL:0000235",
+  "Neutrophil",                       "CL:0000775",
+  "Osteoclast",                       "CL:0000092",
+  "pDC",                              "CL:0001058",
+  "Myeloid-cycling",                  "CL:4033081",
+  # B / plasma / mast
+  "Plasma cell",                      "CL:0000786",
+  "B-memory",                         "CL:0000787",
+  "B-naive",                          "CL:0000788",
+  "Mast cell",                        "CL:0000097"
+)
+
+scRNAseq_atlas$cell_type_ontology_term_id <- plyr::mapvalues(scRNAseq_atlas$annotations_level3,from =  cl_mapping$annotations_level3_readable, to = cl_mapping$cell_type_ontology_term_id)
+
+
+DimPlot(scRNAseq_atlas, group.by = "annotations_level1", cols = "polychrome")+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "annotations_level2", cols = "polychrome")+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "annotations_level3", cols = dittoSeq::dittoColors())+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "cell_type_ontology_term_id", cols = dittoSeq::dittoColors())+coord_equal()
+```
+
+```{r}
+paga_coords <- read.csv("../../03_SALTIRE3_scRNA_seq/01_data/merged_objects_paga_umap_coordinates_annotations_level3_readable.csv",row.names = 1,check.names = FALSE)
+
+head(paga_coords)
+
+all(rownames(paga_coords) %in% colnames(scRNAseq_atlas))
+all(colnames(scRNAseq_atlas) %in% rownames(paga_coords))
+
+scRNAseq_atlas[["paga"]] <- CreateDimReducObject(
+  embeddings = as.matrix(paga_coords[colnames(scRNAseq_atlas), ]),
+  key = "PAGA_",
+  assay = "RNA"
+)
+
+DimPlot(scRNAseq_atlas, group.by = "annotations_level1", reduction = "paga", cols = "polychrome")+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "annotations_level2", reduction = "paga", cols = "polychrome")+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "annotations_level3", reduction = "paga", cols = dittoSeq::dittoColors())+coord_equal()
+DimPlot(scRNAseq_atlas, group.by = "cell_type_ontology_term_id", reduction = "paga", cols = dittoSeq::dittoColors())+coord_equal()
+```
+
+```{r}
+# Write variable-gene count matrix for MAGIC imputation (run in Python)
+magic_genes <- VariableFeatures(scRNAseq_atlas)
+counts_mat <- GetAssayData(scRNAseq_atlas, assay = "RNA", layer = "counts")
+counts_mat <- counts_mat[magic_genes, Cells(scRNAseq_atlas), drop = FALSE]
+write10xCounts(
+  path     = paste0(output_path, "scRNAseq_atlas_magic_input"),
+  x        = counts_mat,
+  barcodes = colnames(counts_mat),
+  gene.id  = rownames(counts_mat),
+  overwrite = T
+)
+```
+
+```{r}
+# Set up reticulate to use MAGIC mamba environment
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+```
+
+```{python}
+# Run MAGIC on VIC object
+import magic
+import scprep
+import numpy as np
+import pandas as pd
+
+vicnuc_data = scprep.io.load_10X("../03_output/01_data_deposition_object_preparation/scRNAseq_atlas_magic_input")
+vicnuc_data = scprep.normalize.library_size_normalize(vicnuc_data)
+vicnuc_data = scprep.transform.sqrt(vicnuc_data)
+magic_operator = magic.MAGIC(random_state=42)
+vicnuc_magic = magic_operator.fit_transform(vicnuc_data)
+vicnuc_magic.to_csv("../03_output/01_data_deposition_object_preparation/scRNAseq_atlas_magic_output.csv")
+```
+
+```{r}
+# Load MAGIC-imputed matrix and store as a separate assay for downstream use
+scRNAseq_atlas_magic <- read.csv(paste0(output_path, "scRNAseq_atlas_magic_output.csv"), row.names = 1)
+scRNAseq_atlas[["MAGIC"]] <- CreateAssayObject(data = t(scRNAseq_atlas_magic))
+rm(scRNAseq_magic)
+```
+
+```{r}
+scRNAseq_atlas_export <- scRNAseq_atlas
+scRNAseq_atlas_export[["RNA3"]] <- as(object = scRNAseq_atlas_export[["RNA"]], Class = "Assay")
+DefaultAssay(scRNAseq_atlas_export) <- "RNA3"
+scRNAseq_atlas_export[["RNA"]] <- NULL
+scRNAseq_atlas_export <- RenameAssays(object = scRNAseq_atlas_export, RNA3 = 'RNA')
+anndataR::write_h5ad(scRNAseq_atlas_export, paste0(output_path, "scRNAseq_atlas.h5ad"), mode = "w")
+saveRDS(scRNAseq_atlas, paste0(output_path, "scRNAseq_atlas.rds"))
+rm(scRNAseq_atlas_export)
+gc()
+```
+
+## Cell type subclusters
+
+```{r}
+## Cell type subclusters
+
+dir.create(file.path(output_path, "magic_input"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(output_path, "magic_output"), recursive = TRUE, showWarnings = FALSE)
+
+sub_cell_list <- list()
+
+celltypes <- c(
+  "vics" = "../../03_SALTIRE3_scRNA_seq/03_output/03_S3_scRNAseq_vic_annotation/vics.rds",
+  "endothelial" = "../../03_SALTIRE3_scRNA_seq/03_output/04_S3_scRNAseq_endothelial_annotation/endothelial.rds",
+  "tnk_cells" = "../../03_SALTIRE3_scRNA_seq/03_output/10_S3_scRNAseq_annotations_combining/tnk_cells.rds",
+  "myeloid_cells" = "../../03_SALTIRE3_scRNA_seq/03_output/10_S3_scRNAseq_annotations_combining/myeloid_cells.rds"
+)
+
+magic_manifest <- tibble()
+
+for (celltype_name in names(celltypes)) {
+  
+  message("Preparing ", celltype_name)
+  
+  sub_obj <- readRDS(celltypes[[celltype_name]])
+  
+  # Replace metadata with cleaned atlas metadata, preserving cell order
+  common_cells <- intersect(Cells(sub_obj), Cells(scRNAseq_atlas))
+  sub_obj <- subset(sub_obj, cells = common_cells)
+  sub_obj@meta.data <- scRNAseq_atlas@meta.data[Cells(sub_obj), , drop = FALSE]
+  
+  # Remove command history for cleaner deposition object
+  sub_obj@commands <- list()
+  
+  # Use variable features for MAGIC input
+  magic_genes <- VariableFeatures(sub_obj)
+  magic_genes <- intersect(magic_genes, rownames(sub_obj))
+  
+  # Extract counts robustly for Seurat v5
+  counts_mat <- GetAssayData(sub_obj, assay = "RNA", layer = "counts")
+  counts_mat <- counts_mat[magic_genes, Cells(sub_obj), drop = FALSE]
+  
+  input_dir <- file.path(output_path, "magic_input", celltype_name)
+  output_csv <- file.path(output_path, "magic_output", paste0(celltype_name, "_magic_output.csv"))
+  
+  write10xCounts(
+    path      = input_dir,
+    x         = counts_mat,
+    barcodes  = colnames(counts_mat),
+    gene.id   = rownames(counts_mat),
+    gene.symbol = rownames(counts_mat),
+    overwrite = TRUE
+  )
+  
+  sub_cell_list[[celltype_name]] <- sub_obj
+  
+  magic_manifest <- bind_rows(
+    magic_manifest,
+    tibble(
+      celltype = celltype_name,
+      input_dir = input_dir,
+      output_csv = output_csv
+    )
+  )
+  
+  rm(sub_obj, counts_mat)
+  gc()
+}
+
+write_csv(magic_manifest, file.path(output_path, "magic_manifest.csv"))
+```
+
+```{python}
+import magic
+import scprep
+import numpy as np
+import pandas as pd
+import os
+
+manifest_path = os.path.join(r.output_path, "magic_manifest.csv")
+manifest = pd.read_csv(manifest_path)
+
+for _, row in manifest.iterrows():
+    celltype = row["celltype"]
+    input_dir = row["input_dir"]
+    output_csv = row["output_csv"]
+
+    print(f"Running MAGIC for {celltype}")
+
+    data = scprep.io.load_10X(input_dir)
+
+    # MAGIC expects cells x genes
+    data = scprep.normalize.library_size_normalize(data)
+    data = scprep.transform.sqrt(data)
+
+    magic_operator = magic.MAGIC(random_state=42)
+    data_magic = magic_operator.fit_transform(data)
+
+    data_magic.to_csv(output_csv)
+
+    print(f"Saved {output_csv}")
+```
+
+```{r}
+for (celltype_name in names(sub_cell_list)) {
+  
+  message("Adding MAGIC assay and exporting ", celltype_name)
+  
+  subcell_magic_path <- file.path(
+    output_path,
+    "magic_output",
+    paste0(celltype_name, "_magic_output.csv")
+  )
+  
+  subcell_magic <- read.csv(
+    subcell_magic_path,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  subcell_export <- sub_cell_list[[celltype_name]]
+  
+  # MAGIC CSV is cells x genes, so transpose to genes x cells for Seurat
+  magic_mat <- t(as.matrix(subcell_magic))
+  
+  # Make sure rows/columns match expected Seurat order
+  magic_mat <- magic_mat[, Cells(subcell_export), drop = FALSE]
+  
+  subcell_export[["MAGIC"]] <- CreateAssayObject(data = magic_mat)
+  
+  # Convert RNA assay from Assay5 to Assay before h5ad export if needed
+  subcell_export[["RNA_export"]] <- as(
+    object = subcell_export[["RNA"]],
+    Class = "Assay"
+  )
+  
+  DefaultAssay(subcell_export) <- "RNA_export"
+  subcell_export[["RNA"]] <- NULL
+  subcell_export <- RenameAssays(
+    object = subcell_export,
+    RNA_export = "RNA"
+  )
+  
+  # Optional: keep MAGIC as non-default assay
+  DefaultAssay(subcell_export) <- "RNA"
+  
+  anndataR::write_h5ad(
+    subcell_export,
+    file.path(output_path, paste0(celltype_name, ".h5ad")),
+    mode = "w"
+  )
+  
+  saveRDS(
+    subcell_export,
+    file.path(output_path, paste0(celltype_name, ".rds"))
+  )
+  
+  rm(subcell_magic, magic_mat, subcell_export)
+  gc()
+}
+```
+
+# Spatial transcriptomics
+
+```{r}
+spatial_atlas <- readRDS("../../04_SALTIRE3_Xenium/03_output/02_SALTIRE3_xenium_histology/atlas_lim.rds")
+```
+
+```{r}
+head(spatial_atlas@meta.data)
+spatial_atlas
+```
+
+```{r}
+xenium_sample_information <- read_excel("../../04_SALTIRE3_Xenium/01_data/sample_info.xlsx")
+
+cols_keep <- c(
+  "nCount_Xenium", "nFeature_Xenium", "segmentation_method", "nCount_BlankCodeword", "nFeature_BlankCodeword", "nCount_ControlCodeword", "nFeature_ControlCodeword", "nCount_ControlProbe","nFeature_ControlProbe", "nCount_Protein", "nFeature_Protein","sample_id", "slide_id","donor_id",
+  "annotations_level1", "annotations_level2", "annotations_level3",
+  "niche", "dist_to_nodule_edge"
+)
+
+spatial_atlas@meta.data <- spatial_atlas@meta.data[, cols_keep]
+
+spatial_atlas$FAPI_level <- plyr::mapvalues(spatial_atlas$sample_id, from = xenium_sample_information$subsample_id, to = xenium_sample_information$fapi_status)
+
+spatial_atlas$FAPI_donor <- paste0(spatial_atlas$donor_id, "_", spatial_atlas$FAPI_level)
+
+
+head(spatial_atlas@meta.data)
+
+spatial_atlas@commands <- list()
+spatial_atlas
+```
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BI5XO_C1", group.by = "niche", cols = spatial_niche_cols)+coord_equal()
+```
+
+```{r}
+all_coords <- data.frame()
+fovs <- Images(spatial_atlas)
+
+for (fov in fovs) {
+  coords <- GetTissueCoordinates(spatial_atlas, image = fov)
+  coords$sample_id <- fov
+  all_coords <- rbind(all_coords, coords)
+}
+
+# Now lengths match
+all_coords$FAPI_level <- spatial_atlas$FAPI_level[all_coords$cell]
+all_coords$FAPI_donor <- spatial_atlas$FAPI_donor[all_coords$cell]
+
+all_coords$cell_type <- spatial_atlas$annotations_level2[all_coords$cell]
+all_coords$niche <- spatial_atlas$niche[all_coords$cell]
+
+write.csv(all_coords, paste0(output_path, "xenium_coordinates.csv"), row.names = FALSE)
+```
+
+```{r}
+saveRDS(spatial_atlas, paste0(output_path, "spatial_atlas.rds"))
+```
+
+```{r}
+library(ggplot2)
+
+# Plot a specific FOV
+fov_to_pick <- "BI5XO_C1"
+fov_cells <- all_coords[all_coords$sample_id == fov_to_pick, ]
+
+# Plot it — this needs to be in an interactive R graphics window, not RStudio's plot pane
+quartz()  # or quartz() on Mac
+ggplot(fov_cells, aes(x = x, y = y, color = niche)) +
+  geom_point(size = 0.3) +
+  coord_equal() +
+  theme_dark() +
+  theme(legend.position = "right") +
+  ggtitle(fov_to_pick)
+
+# Click two corners of your rectangle (top-left, bottom-right)
+cat("Click two corners of your region...\n")
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+```
+```{r}
+quartz()  # Mac native graphics window
+
+p <- ggplot(fov_cells, aes(x = x, y = y, color = niche)) +
+  geom_point(size = 0.3) +
+  coord_equal() +
+  theme_dark()
+
+print(p)  # must print before locator
+
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+```
+```{r}
+quartz()
+
+fov_to_pick <- "BI5XO_C1"
+fov_cells <- all_coords[all_coords$sample_id == fov_to_pick, ]
+
+# Base R plot — locator works natively
+niche_cols <- as.factor(fov_cells$niche)
+plot(fov_cells$x, fov_cells$y,
+     col = rainbow(nlevels(niche_cols))[niche_cols],
+     pch = ".", cex = 2, asp = 1,
+     main = fov_to_pick, xlab = "x", ylab = "y")
+legend("topright", legend = levels(niche_cols),
+       col = rainbow(nlevels(niche_cols)), pch = 16, cex = 0.6)
+
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+
+# Draw the selection on the plot
+rect(min(pts$x), min(pts$y), max(pts$x), max(pts$y),
+     border = "white", lwd = 2, lty = 2)
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BI5XO_C1", group.by = "niche",
+  cols = spatial_niche_cols) +
+  coord_cartesian(xlim = c(5510.1, 8938.3), ylim = c(843.7, 3711.1))
+ImageDimPlot(spatial_atlas, fov = "BI5XO_C1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(5510.1, 8938.3), ylim = c(843.7, 3711.1))
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BI5XO_C1", group.by = "niche") +
+  coord_cartesian(xlim = c(6813, 7813), ylim = c(1818, 2818))
+ImageDimPlot(spatial_atlas, fov = "BI5XO_C1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(6813, 7813), ylim = c(1818, 2818))
+```
+```{r}
+cell_type_cols <- c(
+  "Valvular interstitial cell" = "#332288",
+  "Endothelial cell"           = "#882255",
+  "Granulocyte"                = "#44AA99",
+  "Myeloid"                    = "#CC6677",
+  "NK cell"                    = "#88CCEE",
+  "Proliferating"              = "#AA4499",
+  "T cell"                     = "#117733",
+  "B cell"                     = "#DDCC77"
+)
+cell_type_cols <- A2_celltype_cols_dark_background
+niche_cols <- c(
+  "Cap"           = "grey40",
+  "Spongiosa"     = "grey70",
+  "Peri-nodular"  = "#66CC55",
+  "Immune"        = "#E69F00"
+)
+
+# -----------------------------
+# chosen zoom boxes
+# -----------------------------
+
+zoom_boxes <- data.frame(
+  FAPI_donor = c(
+    "CureAS_UVN_bright",
+    "CureAS_UVN_dim",
+    "CureAS_OJC_dim",
+    "CureAS_OJC_bright",
+    "CureAS_XRU_dim"
+  ),
+  xmin = c(6813, 3452, 2323, 4892, 4746),
+  xmax = c(7813, 4452, 3323, 5892, 5746),
+  ymin = c(1818, 4235, 503, 1400, 1035),
+  ymax = c(2818, 5235, 1503, 2400, 2035)
+)
+
+# -----------------------------
+# plotting functions
+# -----------------------------
+
+plot_full_with_box <- function(df, donor, xmin, xmax, ymin, ymax,
+                               colour_by = c("cell_type", "niche"),
+                               pt_size = 1) {
+  
+  colour_by <- match.arg(colour_by)
+  
+  sub <- df %>% filter(FAPI_donor == donor)
+  
+  p <- ggplot(sub, aes(x = x, y = y)) +
+    geom_point(aes(colour = .data[[colour_by]]), size = pt_size, stroke = 0) +
+    geom_rect(
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+      inherit.aes = FALSE,
+      fill = NA,
+      colour = "red",
+      linewidth = 0.8
+    ) +
+    coord_fixed() +
+    scale_y_reverse() +   # remove this line if you do NOT want image-style orientation
+    theme_void() +
+    ggtitle(paste0(donor, " full")) +
+    theme(
+      plot.title = element_text(hjust = 0.5)
+    )
+  
+  if (colour_by == "cell_type") {
+    p <- p + scale_colour_manual(values = cell_type_cols, drop = FALSE)
+  } else {
+    p <- p + scale_colour_manual(values = niche_cols, drop = FALSE)
+  }
+  
+  p
+}
+
+plot_zoom <- function(df, donor, xmin, xmax, ymin, ymax,
+                      colour_by = c("cell_type", "niche"),
+                      pt_size = 3) {
+  
+  colour_by <- match.arg(colour_by)
+  
+  sub <- df %>%
+    filter(
+      FAPI_donor == donor,
+      x >= xmin, x <= xmax,
+      y >= ymin, y <= ymax
+    )
+  
+  p <- ggplot(sub, aes(x = x, y = y)) +
+    geom_point(aes(colour = .data[[colour_by]]), size = pt_size, stroke = 0) +
+    coord_fixed(
+      xlim = c(xmin, xmax),
+      ylim = c(ymax, ymin)   # reversed so orientation matches full plot
+    ) +
+    theme_void() +
+    ggtitle(paste0(donor, " zoom")) +
+    theme(
+      plot.title = element_text(hjust = 0.5)
+    )
+  
+  if (colour_by == "cell_type") {
+    p <- p + scale_colour_manual(values = cell_type_cols, drop = FALSE)
+  } else {
+    p <- p + scale_colour_manual(values = niche_cols, drop = FALSE)
+  }
+  
+  p
+}
+```
+
+```{r}
+box1 <- zoom_boxes %>% filter(FAPI_donor == "CureAS_UVN_bright")
+
+p_full <- plot_full_with_box(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_full+ DarkTheme()
+```
+
+```{r}
+p_zoom <- plot_zoom(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_zoom+ DarkTheme()
+```
+
+```{r}
+box1 <- zoom_boxes %>% filter(FAPI_donor == "CureAS_UVN_dim")
+
+p_full <- plot_full_with_box(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_full+ DarkTheme()
+
+p_zoom <- plot_zoom(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_zoom+ DarkTheme()
+```
+
+```{r}
+box1 <- zoom_boxes %>% filter(FAPI_donor == "CureAS_OJC_bright")
+
+p_full <- plot_full_with_box(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_full+ DarkTheme()
+
+p_zoom <- plot_zoom(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_zoom+ DarkTheme()
+
+box1 <- zoom_boxes %>% filter(FAPI_donor == "CureAS_OJC_dim")
+
+p_full <- plot_full_with_box(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_full+ DarkTheme()
+
+p_zoom <- plot_zoom(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_zoom+ DarkTheme()
+```
+
+```{r}
+box1 <- zoom_boxes %>% filter(FAPI_donor == "CureAS_XRU_dim")
+
+p_full <- plot_full_with_box(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_full+ DarkTheme()
+
+p_zoom <- plot_zoom(
+  df = all_coords,
+  donor = box1$FAPI_donor,
+  xmin = box1$xmin,
+  xmax = box1$xmax,
+  ymin = box1$ymin,
+  ymax = box1$ymax,
+  colour_by = "cell_type"
+)
+
+p_zoom+ DarkTheme()
+```
+```{r}
+quartz()
+
+fov_to_pick <- "BI5XO_D1"
+fov_cells <- all_coords[all_coords$sample_id == fov_to_pick, ]
+
+# Base R plot — locator works natively
+niche_cols <- as.factor(fov_cells$niche)
+plot(fov_cells$x, fov_cells$y,
+     col = rainbow(nlevels(niche_cols))[niche_cols],
+     pch = ".", cex = 2, asp = 1,
+     main = fov_to_pick, xlab = "x", ylab = "y")
+legend("topright", legend = levels(niche_cols),
+       col = rainbow(nlevels(niche_cols)), pch = 16, cex = 0.6)
+
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+
+# Draw the selection on the plot
+rect(min(pts$x), min(pts$y), max(pts$x), max(pts$y),
+     border = "white", lwd = 2, lty = 2)
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BI5XO_D1", group.by = "niche",
+  cols = spatial_niche_cols) +
+  coord_cartesian(xlim = c(2469.3, 4846.6), ylim = c(3279.5, 5587.7))
+ImageDimPlot(spatial_atlas, fov = "BI5XO_D1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(2469.3, 4846.6), ylim = c(3279.5, 5587.7))
+```
+
+```{r}
+quartz()
+
+fov_to_pick <- "BXNFB_B1"
+fov_cells <- all_coords[all_coords$sample_id == fov_to_pick, ]
+
+# Base R plot — locator works natively
+niche_cols <- as.factor(fov_cells$niche)
+plot(fov_cells$x, fov_cells$y,
+     col = rainbow(nlevels(niche_cols))[niche_cols],
+     pch = ".", cex = 2, asp = 1,
+     main = fov_to_pick, xlab = "x", ylab = "y")
+legend("topright", legend = levels(niche_cols),
+       col = rainbow(nlevels(niche_cols)), pch = 16, cex = 0.6)
+
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+
+# Draw the selection on the plot
+rect(min(pts$x), min(pts$y), max(pts$x), max(pts$y),
+     border = "white", lwd = 2, lty = 2)
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BXNFB_B1", group.by = "niche",
+  cols = spatial_niche_cols) +
+  coord_cartesian(xlim = c(2469.3, 4846.6), ylim = c(3279.5, 5587.7))
+ImageDimPlot(spatial_atlas, fov = "BXNFB_B1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(2469.3, 4846.6), ylim = c(3279.5, 5587.7))
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BXNFB_B1", group.by = "niche",
+  cols = spatial_niche_cols) +
+  coord_cartesian(xlim = c(2323, 3323), ylim = c(503, 1503))
+ImageDimPlot(spatial_atlas, fov = "BXNFB_B1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(2323, 3323), ylim = c(503, 1503))
+```
+
+```{r}
+ImageDimPlot(spatial_atlas, fov = "BXNFB_A1", group.by = "niche",
+  cols = spatial_niche_cols) +
+  coord_cartesian(xlim = c(2323, 3323), ylim = c(503, 1503))
+ImageDimPlot(spatial_atlas, fov = "BXNFB_A1", group.by = "annotations_level2",
+  cols = A2_celltype_cols_dark_background) +
+  coord_cartesian(xlim = c(2323, 3323), ylim = c(503, 1503))
+```
+```{r}
+fovs <- Images(spatial_atlas)
+all_coords <- data.frame()
+for (fov in fovs) {
+  coords <- GetTissueCoordinates(spatial_atlas, image = fov)
+  coords$sample_id <- fov
+  all_coords <- rbind(all_coords, coords)
+}
+
+all_coords$cell_type <- spatial_atlas$annotations_level1[all_coords$cell]
+all_coords$niche <- spatial_atlas$niche[all_coords$cell]
+all_coords$FAPI_donor <- spatial_atlas$FAPI_donor[all_coords$cell]
+
+# Verify
+cat("Rows:", nrow(all_coords), "\n")  # should be 104311
+cat("Samples:", paste(unique(all_coords$sample_id), collapse=", "), "\n")
+cat("FAPI donors:", paste(unique(all_coords$FAPI_donor), collapse=", "), "\n")
+cat("NAs in niche:", sum(is.na(all_coords$niche)), "\n")
+
+write.csv(all_coords, paste0(output_path, "xenium_coordinates.csv"), row.names = FALSE)
+```
+
+```{r}
+quartz()
+
+fov_to_pick <- "BXNFB_A1"
+fov_cells <- all_coords[all_coords$sample_id == fov_to_pick, ]
+
+# Base R plot — locator works natively
+niche_cols <- as.factor(fov_cells$niche)
+plot(fov_cells$x, fov_cells$y,
+     col = rainbow(nlevels(niche_cols))[niche_cols],
+     pch = ".", cex = 2, asp = 1,
+     main = fov_to_pick, xlab = "x", ylab = "y")
+legend("topright", legend = levels(niche_cols),
+       col = rainbow(nlevels(niche_cols)), pch = 16, cex = 0.6)
+
+pts <- locator(2)
+cat(sprintf("xlim = c(%.1f, %.1f)\nylim = c(%.1f, %.1f)\n",
+    min(pts$x), max(pts$x), min(pts$y), max(pts$y)))
+
+# Draw the selection on the plot
+rect(min(pts$x), min(pts$y), max(pts$x), max(pts$y),
+     border = "white", lwd = 2, lty = 2)
+```
+
+
+```{r}
+head(spatial_atlas@meta.data)
+```
+
+```{r}
+cols_keep <- c(
+  "nCount_Xenium", "nFeature_Xenium", "segmentation_method", "nCount_BlankCodeword", "nFeature_BlankCodeword", "nCount_ControlCodeword", "nFeature_ControlCodeword", "nCount_ControlProbe","nFeature_ControlProbe", "nCount_ProteinExpression", "nFeature_ProteinExpression","sample_id", "slide_id","donor_id",
+  "annotations_level3", "annotations_level2", "annotations_level1",
+  "niche", "dist_to_nodule_edge"
+)
+
+spatial_atlas@meta.data <- spatial_atlas@meta.data[, cols_keep]
+
+head(spatial_atlas@meta.data)
+
+spatial_atlas@commands <- list()
+spatial_atlas
+```
+
+```{r}
+saveRDS(spatial_atlas, paste0(output_path, "spatial_atlas.rds"))
+```
+
+```{r}
+DotPlot(spatial_atlas, features = c("CHAD", "IBSP", "BGLAP", "FAP"), group.by = "slide_id")
+```
+
+```{r}
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_A1", features = "FAP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_B1", features = "FAP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_B1", features = "FAP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_A1", features = "FAP")+viridis::scale_fill_viridis()
+```
+
+```{r}
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_A1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_B1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_C1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BI5XO_D1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_D1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_C1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_B1", features = "IBSP")+viridis::scale_fill_viridis()
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_A1", features = "IBSP")+viridis::scale_fill_viridis()
+```
+
+```{r}
+ImageFeaturePlot(spatial_atlas,fov = "BXNFB_A1", features = "IBSP")+viridis::scale_fill_viridis()
+
+```

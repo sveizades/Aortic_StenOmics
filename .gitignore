@@ -1,0 +1,91 @@
+# macOS / editor clutter
+.DS_Store
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.Rproj.user-backup*/
+*.Rproj.user/
+~$*
+*.tmp
+*.bak
+tmp.*
+
+# Local environment and assistant/session state
+.Renviron
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Intermediate notebook artefacts
+*_cache/
+*_files/
+
+# Large or generated analysis inputs/outputs
+**/03_output/
+**/output/
+**/outputs/
+**/cellbender_output/
+**/cellranger_celltypes_output/
+**/souporcell_output/
+**/v5.0.0/
+**/20251029__151959__MBSV20251027/
+
+# Keep notebooks/scripts, but not generated Shiny data caches
+07_shiny_app/01_data/
+
+# Common large scientific data formats
+*.rds
+*.Rds
+*.RDS
+*.h5
+*.h5ad
+*.h5seurat
+*.mtx
+*.mtx.gz
+*.loom
+*.parquet
+*.zarr
+*.zarr.zip
+*.csv.gz
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.bai
+*.cram
+*.vcf
+*.vcf.gz
+*.gtf
+*.gff
+*.gff3
+*.ome.tif
+*.ome.tiff
+*.czi
+*.npy
+*.npz
+*featureCounts_output.txt
+AorticStenomics_FollowUp_Data.csv
+SALTIRE3_raw_data_formatted.csv
+
+# Generated figures/tables and binary office exports
+*.pdf
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.docx
+*.pptx
+
+# renv package cache should not be committed; keep renv.lock and renv/activate.R
+renv/library/
+renv/staging/
+renv/python/
+renv/sandbox/
+renv/cellar/
+renv/local/

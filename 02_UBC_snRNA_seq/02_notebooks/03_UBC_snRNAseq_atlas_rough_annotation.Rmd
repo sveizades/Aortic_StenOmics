@@ -1,0 +1,246 @@
+---
+title: "03: UBC snRNA-seq Atlas Rough Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to perform an initial broad clustering of the full atlas to identify major cell type groups, which are then subsetted for cell-type-specific annotation in subsequent notebooks.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(BiocParallel)
+library(scDblFinder)
+library(readxl)
+library(digest)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+atlas <- readRDS(file = "../03_output/02_UBC_snRNAseq_dehashing/dehashed_atlas.rds")
+donor_info <- as.data.frame(read_excel("../../00_study_design/patient_information.xlsx"))
+```
+
+```{r}
+# Map donor IDs to clinical classification
+atlas$clinical_classification <- mapvalues(atlas$donor_id, from = donor_info$donor_id, to = donor_info$clinical_classification)
+atlas$clinical_classification_readable <- mapvalues(atlas$donor_id, from = donor_info$donor_id, to = donor_info$clinical_classification_readable)
+table(atlas$clinical_classification)
+table(atlas$clinical_classification_readable)
+```
+
+## Doublet detection
+
+```{r}
+# Flag souporcell-identified doublets, then run scDblFinder per pool.
+# Pools without souporcell demux (single-donor captures) are run unsupervised.
+atlas$known_doublet <- atlas$status == "doublet"
+
+# Stable seed per pool_id
+make_seed <- function(x) {
+  strtoi(substr(digest(x, algo = "xxhash32"), 1, 7), base = 16)
+}
+
+for (i in sort(unique(atlas$pool_id))) {
+  
+  message("Running scDblFinder for: ", i)
+  
+  filt <- subset(atlas, pool_id == i)
+  
+  filt_sce <- SingleCellExperiment(
+    list(counts = filt@assays$RNA@layers$counts),
+    colData = filt@meta.data
+  )
+  
+  seed_i <- make_seed(i)
+  set.seed(seed_i)
+  
+  bp <- MulticoreParam(
+    workers = 3,
+    RNGseed = seed_i
+  )
+  
+  if (i %in% c("CureAS_QH", "CureAS_YL", "CureAS_KQ", "CureAS_YA")) {
+    # Single-donor captures: no souporcell doublets available, run unsupervised
+    filt_sce <- scDblFinder(
+      filt_sce,
+      BPPARAM = bp
+    )
+  } else {
+    filt_sce <- scDblFinder(
+      filt_sce,
+      knownDoublets = "known_doublet",
+      BPPARAM = bp
+    )
+  }
+  
+  scdbl_cols <- grep("^scDblFinder\\.", colnames(colData(filt_sce)), value = TRUE)
+  
+  atlas@meta.data[colnames(filt_sce), scdbl_cols] <-
+    as.data.frame(colData(filt_sce))[, scdbl_cols, drop = FALSE]
+}
+```
+
+```{r}
+# Review per-donor QC metrics to identify low-quality donors for exclusion
+VlnPlot(atlas, features = "nCount_RNA", pt.size = 0, sort = T, group.by = "donor_id", log = T) + NoLegend()
+VlnPlot(atlas, features = "nFeature_RNA", pt.size = 0, sort = T, group.by = "donor_id", log = T) + NoLegend()
+VlnPlot(atlas, features = "log10GenesPerUMI", pt.size = 0, sort = T, group.by = "donor_id", log = F) + NoLegend()
+VlnPlot(atlas, features = "percent_top50", pt.size = 0, sort = T, group.by = "donor_id", log = F) + NoLegend()
+```
+
+```{r}
+# Exclude three donors with poor quality metrics, then normalise, integrate
+# across donors with Harmony, and cluster across a range of resolutions
+atlas <- subset(atlas, donor_id %in% c("CureAS_KS4", "CureAS_C4J", "CureAS_PUM"), invert = T)
+atlas <- harmony_cluster(atlas, dims = 1:50, normalize = TRUE)
+plot_cluster_umaps(atlas)
+```
+
+```{r}
+# Canonical marker genes for broad cell type identification
+FeaturePlot(atlas, features = "IL7R", raster = F) + coord_equal()   # T cells
+FeaturePlot(atlas, features = "MS4A1", raster = F) + coord_equal()  # B cells
+FeaturePlot(atlas, features = "CD163", raster = F) + coord_equal()  # Macrophages/monocytes
+FeaturePlot(atlas, features = "DCN", raster = F) + coord_equal()    # VICs
+FeaturePlot(atlas, features = "VWF", raster = F) + coord_equal()    # Endothelial
+FeaturePlot(atlas, features = "PLIN1", raster = F) + coord_equal()  # Adipocytes
+FeaturePlot(atlas, features = "GRIK2", raster = F) + coord_equal()  # Neuronal
+FeaturePlot(atlas, features = "KIT", raster = F) + coord_equal()    # Mast cells
+FeaturePlot(atlas, features = "MKI67", raster = F) + coord_equal()  # Cycling cells
+```
+
+```{r}
+# Assign broad cell type labels at resolution 0.02; cycling cells require
+# resolution 0.06 to separate from the VIC cluster
+atlas$annotations_level1 <- ""
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "0"] <- "vics"
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "1"] <- "myeloid"
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "2"] <- "tnkb_cells"
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "3"] <- "endothelial"
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "4"] <- "adipocytes"
+atlas$annotations_level1[atlas$RNA_snn_res.0.02 == "5"] <- "mast"
+atlas$annotations_level1[atlas$RNA_snn_res.0.06 == "7"] <- "cycling"
+DimPlot(atlas, reduction = "umap", group.by = "annotations_level1", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(atlas) <- "annotations_level1"
+FAM(atlas, name = "atlas_rough_annotations_level1", output_path = output_path)
+```
+
+# Load Cell Ranger cell type predictions
+
+```{r}
+sample_list <- paste0(unique(atlas$pool_id), "/outs/cell_types/cell_types.csv")
+write.table(sample_list, file = paste0(output_path, "cellranger_celltypes_file_list.txt"), quote = F, row.names = F, col.names = F)
+```
+
+```{bash}
+# Retrieve cellranger cell type output from NAS
+source ~/.bashrc
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/03_UBC_snRNAseq_atlas_rough_annotation/cellranger_celltypes_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/02-CellRanger/ \
+  ../01_data/cellranger_celltypes_output
+```
+
+```{r}
+# Build full paths to all downloaded inputs
+celltype_files <- paste0("../01_data/cellranger_celltypes_output/", unique(atlas$pool_id), "/outs/cell_types/cell_types.csv")
+```
+
+```{r, eval=FALSE}
+# Run once to generate reference checksums for non-deterministic inputs
+generate_input_checksums(celltype_files, 
+                         "../01_data/input_checksums_celltypes.csv")
+```
+
+```{r, message=TRUE}
+validate_input_checksums(celltype_files, 
+                         "../01_data/input_checksums_celltypes.csv")
+```
+
+```{r}
+# Add Cell Ranger automated cell type predictions as metadata for comparison with
+# manual annotations; overlap_barcodes handles cells absent from prediction output
+atlas$predicted_coarse_cell_type <- ""
+atlas$predicted_fine_cell_type <- ""
+atlas$predicted_cell_count_in_model <- ""
+for(i in unique(atlas$pool_id)){
+  cell_type_predictions <- read.csv(
+    paste0("../01_data/cellranger_celltypes_output/", i, "/outs/cell_types/cell_types.csv"),
+    row.names = 1
+  )
+  rownames(cell_type_predictions) <- paste0(i, "_", rownames(cell_type_predictions))
+  overlap_barcodes <- intersect(rownames(cell_type_predictions), colnames(atlas))
+  atlas@meta.data[overlap_barcodes, c("predicted_coarse_cell_type", "predicted_fine_cell_type", "predicted_cell_count_in_model")] <-
+    cell_type_predictions[overlap_barcodes, c("coarse_cell_type", "fine_cell_type", "cell_count_in_model")]
+}
+DimPlot(atlas, group.by = "predicted_coarse_cell_type", cols = "polychrome") + coord_equal()
+DimPlot(atlas, group.by = "predicted_fine_cell_type") + coord_equal()
+table(atlas$predicted_coarse_cell_type)
+table(atlas$predicted_fine_cell_type)
+```
+
+# Save
+
+```{r}
+# Save each broad cell type as a separate RDS for subclustering in notebooks 04-10
+for(i in unique(atlas$annotations_level1)){
+  saveRDS(object = subset(atlas, annotations_level1 == i), file = paste0(output_path, i, ".rds"))
+}
+saveRDS(object = atlas, file = paste0(output_path, "rough_atlas.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_03.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_03.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-12T16:17:46.193995",
+    "stage1_npy": "/Users/stefan/UoE/Dump/260204_plotting_images/F208-normal_stage1.npy",
+    "stage1_params": "/Users/stefan/UoE/Dump/260204_plotting_images/F208-normal_stage1_params.json",
+    "pixel_size_um": 0.2196544834974585,
+    "stage": 2
+  },
+  "parameters": {
+    "roi_bbox": [
+      3964,
+      1934,
+      43091,
+      9602
+    ],
+    "zoom_bbox": [
+      11112,
+      8031,
+      12557,
+      9475
+    ],
+    "contrast_min": 0.0,
+    "contrast_max": 198.5234899328859,
+    "scalebar_um": 2000.0,
+    "zoom_scalebar_um": 200.0,
+    "figure_width_cm": 6.0
+  }
+}

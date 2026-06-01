@@ -1,0 +1,127 @@
+---
+title: "07: UBC snRNA-seq Mononuclear Phagocyte Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the mononuclear phagocyte (MPS) cluster, which includes valve-resident macrophages, monocytes, and dendritic cells.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/07_UBC_snRNAseq_myeloid_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+myeloid <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/myeloid.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+# Use SelectIntegrationFeatures to reduce donor batch effects
+myeloid <- harmony_cluster(myeloid, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(myeloid)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify doublet/contaminating clusters
+plot_qc_by_cluster(myeloid, "RNA_snn_res.0.2")
+```
+
+```{r}
+Idents(myeloid) <- "RNA_snn_res.0.2"
+FAM(myeloid, "preqc_myeloid_0.2", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.2 cluster 3 is very low quality; RNA_snn_res.0.2 clusters 2 and 4 are mesenchymal doublet clusters.
+
+```{r}
+dim(myeloid)
+myeloid <- subset(myeloid, RNA_snn_res.0.2 %in% c("2", "3", "4") | known_doublet == T, invert = T)
+dim(myeloid)
+```
+
+# Re-cluster after filtering
+
+```{r}
+myeloid <- harmony_cluster(myeloid, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(myeloid)
+```
+
+```{r}
+Idents(myeloid) <- "RNA_snn_res.0.2"
+FAM(myeloid, "myeloid_0.2", output_path = output_path)
+```
+
+# Annotation
+
+```{r}
+# Assign sequential cluster labels prefixed with "Mn" using resolution 0.2
+myeloid$annotations_level2 <- paste0("Mn", as.numeric(myeloid$RNA_snn_res.0.2))
+myeloid$annotations_level2 <- factor(myeloid$annotations_level2, levels = sort(unique(myeloid$annotations_level2)))
+DimPlot(myeloid, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+Idents(myeloid) <- "annotations_level2"
+FAM(myeloid, "myeloid_annotations_level2", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(myeloid, paste0(output_path, "myeloid.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_07.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_07.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

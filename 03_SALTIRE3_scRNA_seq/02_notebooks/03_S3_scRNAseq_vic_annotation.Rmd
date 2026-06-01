@@ -1,0 +1,231 @@
+---
+title: "03: SALTIRE3 scRNA-seq VIC Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the valvular interstitial cell (VIC) cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(SeuratDisk)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(openxlsx)
+library(anndataR)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/03_S3_scRNAseq_vic_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+vics <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/vics.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+vics <- harmony_cluster(vics, dims = 1:50, use_integration_features = TRUE)
+plot_cluster_umaps(vics)
+```
+
+```{r}
+plot_qc_by_cluster(vics, "RNA_snn_res.0.06")
+```
+
+```{r}
+# Additional stress/artefact metrics to guide IEG regression in the final round
+VlnPlot(vics, features = "percent_top50", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "log10GenesPerUMI", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "percent_oxphos", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "percent_apop", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "percent_dna_repair", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "percent_ieg", group.by = "RNA_snn_res.0.06", pt.size = 0)
+VlnPlot(vics, features = "percent_ribo", group.by = "RNA_snn_res.0.06", pt.size = 0)
+```
+
+```{r}
+Idents(vics) <- "RNA_snn_res.0.06"
+FAM(vics, "preqc_vics_0.06", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.06 cluster 2 is a mononuclear phagocyte doublet cluster; cluster 1 is very low quality.
+
+```{r}
+dim(vics)
+vics <- subset(vics, RNA_snn_res.0.06 != "2" & RNA_snn_res.0.06 != "1" & known_doublet == F)
+dim(vics)
+```
+
+# Second clustering round
+
+```{r}
+vics <- harmony_cluster(vics, dims = 1:50, use_integration_features = TRUE)
+plot_cluster_umaps(vics)
+```
+
+```{r}
+plot_qc_by_cluster(vics, "RNA_snn_res.0.4", show_doublets = FALSE)
+```
+
+```{r}
+VlnPlot(vics, features = "percent_top50", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "log10GenesPerUMI", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "percent_oxphos", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "percent_apop", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "percent_dna_repair", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "percent_ieg", group.by = "RNA_snn_res.0.4", pt.size = 0)
+VlnPlot(vics, features = "percent_ribo", group.by = "RNA_snn_res.0.4", pt.size = 0)
+```
+
+```{r}
+# Interactive histograms to inspect count/feature distributions before second filter
+plot_ly(x = vics$nCount_RNA, type = "histogram")
+plot_ly(x = vics$nFeature_RNA, type = "histogram")
+```
+
+## Second QC filtering
+
+Remove a low-quality cluster and apply count/feature thresholds informed by the histograms.
+
+```{r}
+dim(vics)
+vics <- subset(vics, RNA_snn_res.0.4 != "6" & nCount_RNA > 1400 & nFeature_RNA > 700)
+dim(vics)
+```
+
+# Final clustering round
+
+```{r}
+# Regress out IEG expression artefacts to prevent them from driving cluster structure
+vics <- harmony_cluster(vics, dims = 1:50, use_integration_features = TRUE,
+                        vars.to.regress = "percent_ieg")
+plot_cluster_umaps(vics)
+```
+
+```{r}
+# Verify VIC subtype markers resolve clearly after IEG regression
+FeaturePlot(vics, features = "FAP") + coord_equal()
+FeaturePlot(vics, features = "NTM") + coord_equal()
+FeaturePlot(vics, features = "GFAP") + coord_equal()
+```
+
+```{r}
+Idents(vics) <- "RNA_snn_res.0.1"
+FAM(vics, "vics_0.1", output_path = output_path)
+Idents(vics) <- "RNA_snn_res.0.3"
+FAM(vics, "vics_0.3", output_path = output_path)
+```
+
+# Subclustering to resolve more VICs
+
+```{r}
+# Subcluster the largest cluster at res 0.178 to separate a neural crest-like population
+Idents(vics) <- "RNA_snn_res.0.1"
+vics <- FindSubCluster(vics, cluster = "0", resolution = 0.178, graph.name = "RNA_snn")
+DimPlot(vics, reduction = "umap", group.by = "sub.cluster", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(vics) <- "sub.cluster"
+FAM(vics, "vics_0.1_0_sub.cluster", output_path = output_path)
+```
+
+```{r}
+# Further subcluster cluster 5 to separate quiescent from neural crest-like cells
+Idents(vics) <- "sub.cluster"
+vics <- FindSubCluster(vics, cluster = "0_1", resolution = 0.15, graph.name = "RNA_snn")
+DimPlot(vics, reduction = "umap", group.by = "sub.cluster", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+DotPlot(vics, features = c("GFAP", "SOX10"), group.by = "sub.cluster")
+```
+
+# Annotation
+
+```{r}
+vics$annotations_level2_readable <- mapvalues(vics$sub.cluster, from = c("0_0","0_1_0","0_1_1","0_1_2","0_1_3","0_2","1","2","3","4"), to = c("VIC-transitional", "VIC-quiescent", "VIC-quiescent", "VIC-neural-crest", "VIC-quiescent", "VIC-FAP-osteogenic", "VIC-contractile", "VIC-spongiosa", "VIC-FAP-osteogenic", "VIC-IFN"))
+vics$annotations_level2_readable <- factor(vics$annotations_level2_readable,
+  levels = names(sort(table(vics$annotations_level2_readable), decreasing = T)))
+vics$annotations_level2 <- mapvalues(vics$annotations_level2_readable,
+  from = names(sort(table(vics$annotations_level2_readable), decreasing = T)),
+  to   = paste0("VICc", 1:length(unique(vics$annotations_level2_readable))))
+vics$annotations_level2 <- factor(vics$annotations_level2, levels = sort(unique(vics$annotations_level2)))
+# Level 3 mirrors level 2 for VICs (no further subdivision beyond subclustering above)
+vics$annotations_level3_readable <- vics$annotations_level2_readable
+vics$annotations_level3 <- vics$annotations_level2
+
+DimPlot(vics, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(vics, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+Idents(vics) <- "annotations_level2_readable"
+FAM(vics, "vics_annotations_level2_readable", output_path = output_path)
+Idents(vics) <- "annotations_level3_readable"
+FAM(vics, "vics_annotations_level3_readable", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(object = vics, file = paste0(output_path, "vics.rds"))
+```
+
+```{r}
+# Export as h5ad for drug2cell and other Python-based analyses
+vics_export <- vics
+vics_export[["RNA"]] <- as(object = vics_export[["RNA"]], Class = "Assay")
+anndataR::write_h5ad(vics_export, paste0(output_path, "vics_export_drug2cell.h5ad"), mode = "w")
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_03.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_03.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

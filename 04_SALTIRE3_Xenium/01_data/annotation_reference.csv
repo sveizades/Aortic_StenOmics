@@ -1,0 +1,47 @@
+annotations_level3,annotations_level2,annotations_level1
+B-memory,B cell,B cell
+B-naive,B cell,B cell
+Mast cell,Mast cell,Granulocyte
+Myeloid-cycling,Proliferating,Proliferating
+cDC1,Dendritic cell,Myeloid
+cDC2,Dendritic cell,Myeloid
+moDC,Dendritic cell,Myeloid
+pDC,Dendritic cell,Myeloid
+IFN-stimulated macrophage,Macrophage,Myeloid
+Osteoclast,Macrophage,Myeloid
+Resident macrophage,Macrophage,Myeloid
+Resident activated macrophage,Macrophage,Myeloid
+Scar-associated macrophage,Macrophage,Myeloid
+Classical monocyte,Monocyte,Myeloid
+Non-classical monocyte,Monocyte,Myeloid
+Neutrophil,Neutrophil,Granulocyte
+NK-CD56-bright,NK,NK cell
+NK-CD56-dim,NK,NK cell
+NK-cycling,Proliferating,Proliferating
+Plasma cell,Plasma cell,B cell
+T-CD4-cyto,T-CD4,T cell
+T-CD4-EM,T-CD4,T cell
+T-CD4-naive,T-CD4,T cell
+T-CD4-Th1,T-CD4,T cell
+T-CD4-Th17,T-CD4,T cell
+T-CD4-Treg,T-CD4,T cell
+T-CD8-cyto,T-CD8,T cell
+T-CD8-EM,T-CD8,T cell
+T-CD8-MAIT,T-CD8,T cell
+T-cycling,Proliferating,Proliferating
+T-gd-cyto,T-gd,T cell
+T-gd-V9,T-gd,T cell
+VEC-activated,VEC-vascular,Endothelial cell
+VEC-arterial,VEC-vascular,Endothelial cell
+VEC-capillary,VEC-vascular,Endothelial cell
+VEC-endocardial,VEC-endocardial,Endothelial cell
+VEC-lymphatic,VEC-vascular,Endothelial cell
+VEC-venous,VEC-vascular,Endothelial cell
+VIC-cycling,Proliferating,Proliferating
+VIC-FAP-osteogenic,VIC-FAP-osteogenic,Valvular interstitial cell
+VIC-IFN,VIC-IFN,Valvular interstitial cell
+VIC-spongiosa,VIC-spongiosa,Valvular interstitial cell
+VIC-neural-crest,VIC-neural-crest,Valvular interstitial cell
+VIC-quiescent,VIC-quiescent,Valvular interstitial cell
+VIC-contractile,VIC-contractile,Valvular interstitial cell
+VIC-transitional,VIC-transitional,Valvular interstitial cell

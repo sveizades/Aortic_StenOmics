@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-24T15:47:13.965729",
+    "czi_path": "/Users/stefan/UoE/Slide_Scanning/E241208D_ASOmics-HE-1/E241208D_BCRNQ-A25_PX3J.czi",
+    "original_shape": [
+      60441,
+      73795,
+      3
+    ],
+    "pixel_size_um": 0.21957577959382474,
+    "stage": 1
+  },
+  "parameters": {
+    "rotation": 95.0,
+    "broad_crop_bbox": [
+      5688,
+      3347,
+      62226,
+      75942
+    ]
+  },
+  "output": {
+    "npy_path": "/Users/stefan/UoE/Dump/260204_plotting_images/Figure_1c_control_stage1.npy",
+    "aligned_shape": [
+      72595,
+      56538,
+      3
+    ]
+  }
+}

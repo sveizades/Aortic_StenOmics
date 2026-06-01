@@ -1,0 +1,260 @@
+---
+title: "06: SALTIRE3 scRNA-seq Mononuclear Phagocyte Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the myeloid cluster.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(plotly)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/06_S3_scRNAseq_myeloid_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+myeloid <- readRDS(file = "../03_output/02_S3_scRNAseq_atlas_rough_annotation/myeloid.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+myeloid <- harmony_cluster(myeloid, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(myeloid)
+```
+
+```{r}
+plot_qc_by_cluster(myeloid, "RNA_snn_res.0.2")
+```
+
+```{r}
+Idents(myeloid) <- "RNA_snn_res.0.2"
+FAM(myeloid, "preqc_myeloid_0.2", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.2 clusters 1/7/6/9/13 (mesenchyme), 4 (TNK), 11 (endothelial), and 12 (B) are doublets; clusters 2/10 are low quality.
+
+```{r}
+# Visualise cells to be removed before subsetting
+myeloid$remove <- "no"
+myeloid$remove[myeloid$RNA_snn_res.0.2 %in% c("1", "2", "4", "6","7","9","10","11","12","13")] <- "yes"
+DimPlot(myeloid, reduction = "umap", group.by = "remove", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+dim(myeloid)
+myeloid <- subset(myeloid, RNA_snn_res.0.2 %in% c("1", "2", "4", "6","7","9","10","11","12","13") | known_doublet == T, invert = T)
+dim(myeloid)
+```
+
+# Second clustering round
+
+```{r}
+myeloid <- harmony_cluster(myeloid, dims = 1:30, use_integration_features = TRUE)
+plot_cluster_umaps(myeloid)
+```
+
+```{r}
+plot_qc_by_cluster(myeloid, "RNA_snn_res.0.3", show_doublets = FALSE)
+```
+
+```{r}
+Idents(myeloid) <- "RNA_snn_res.0.3"
+FAM(myeloid, "preqc2_myeloid_0.3", output_path = output_path)
+```
+
+```{r}
+# Interactive histograms to inspect count/feature distributions before second filter
+plot_ly(x = myeloid$nCount_RNA, type = "histogram")
+plot_ly(x = myeloid$nFeature_RNA, type = "histogram")
+```
+
+## Second QC filtering
+
+RNA_snn_res.0.3 cluster 9 is a doublet cluster; clusters 5/6 are low quality.
+
+```{r}
+dim(myeloid)
+myeloid <- subset(myeloid, RNA_snn_res.0.3 %in% c("5", "6", "9"), invert = T)
+dim(myeloid)
+```
+
+# Final clustering round
+
+```{r}
+# Regress out IEG expression artefacts in the final embedding
+myeloid <- harmony_cluster(myeloid, dims = 1:30, use_integration_features = TRUE,
+                           vars.to.regress = "percent_ieg")
+plot_cluster_umaps(myeloid)
+```
+
+```{r}
+Idents(myeloid) <- "RNA_snn_res.0.1"
+FAM(myeloid, "myeloid_0.1", output_path = output_path)
+Idents(myeloid) <- "RNA_snn_res.0.3"
+FAM(myeloid, "myeloid_0.3", output_path = output_path)
+Idents(myeloid) <- "RNA_snn_res.0.4"
+FAM(myeloid, "myeloid_0.4", output_path = output_path)
+```
+
+# Subclustering to resolve macrophage and DC subtypes
+
+```{r}
+FeaturePlot(myeloid, features = "CTSK", order = F) + coord_equal()
+```
+
+```{r}
+# Subcluster cluster 3 to separate osteoclasts (CTSK+) from resident macrophages
+myeloid <- FindSubCluster(myeloid, cluster = "5", resolution = 0.1, graph.name = "RNA_snn")
+DimPlot(myeloid, reduction = "umap", group.by = "sub.cluster", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(myeloid) <- "sub.cluster"
+FAM(myeloid, "myeloid_sub.cluster", output_path = output_path)
+```
+
+```{r}
+# Subcluster cluster 2 further to resolve DC subtypes
+myeloid <- FindSubCluster(myeloid, cluster = "3", resolution = 0.2, graph.name = "RNA_snn", subcluster.name = "sub.cluster.2")
+DimPlot(myeloid, reduction = "umap", group.by = "sub.cluster.2", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(myeloid) <- "sub.cluster.2"
+FAM(myeloid, "myeloid_sub.cluster.2", output_path = output_path)
+```
+
+```{r}
+# Subcluster cluster 2 further to resolve DC subtypes
+myeloid <- FindSubCluster(myeloid, cluster = "7", resolution = 0.2, graph.name = "RNA_snn", subcluster.name = "sub.cluster.3")
+DimPlot(myeloid, reduction = "umap", group.by = "sub.cluster.3", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+Idents(myeloid) <- "sub.cluster.3"
+FAM(myeloid, "myeloid_sub.cluster.3", output_path = output_path)
+```
+
+```{r}
+# Use Cell Ranger cell-type predictions to cross-validate cluster identity
+majority_labels <- myeloid@meta.data %>%
+  dplyr::group_by(sub.cluster.2) %>%
+  summarise(predicted_fine_cell_type_gen = names(sort(table(predicted_fine_cell_type), decreasing = TRUE))[1])
+myeloid$predicted_fine_cell_type_gen <- majority_labels$predicted_fine_cell_type_gen[match(myeloid$sub.cluster.2, majority_labels$sub.cluster.2)]
+DimPlot(myeloid, reduction = "umap", group.by = "predicted_fine_cell_type_gen", cols = "polychrome", raster = F) + coord_equal()
+```
+
+```{r}
+DotPlot(myeloid, features = c("FOLR2", "LYVE1", "C1QC", "CCL4", "FCN1", "EREG", "S100A8",
+                               "IL1B", "SPP1", "TREM2", "CD9", "S100P", "CSF3R", "CLEC9A",
+                               "CD1C", "CTSK", "CCR7", "CD200", "FCGR3A"), cols = "RdBu") + RotatedAxis()
+```
+
+# Annotation
+
+```{r}
+myeloid$annotations_level3_readable <- ""
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 %in% c("0", "1", "3_0")] <- "Resident activated macrophage"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "7_1"] <- "moDC"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "3_1"] <- "cDC2"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "5_0"] <- "Scar-associated macrophage"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "5_1"] <- "Osteoclast"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "2"] <- "Resident_macrophage"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "4"] <- "Classical_monocyte"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "6"] <- "Non-classical_monocyte"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "7_0"] <- "IFN-stim_macrophage"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "8"] <- "Neutrophil"
+myeloid$annotations_level3_readable[myeloid$sub.cluster.3 == "9"] <- "cDC1"
+
+myeloid$annotations_level2_readable <- ""
+myeloid$annotations_level2_readable[myeloid$sub.cluster.3 %in% c("0", "1", "3_0", "5_0", "2", "7_0", "5_1")] <- "Macrophage"
+myeloid$annotations_level2_readable[myeloid$sub.cluster.3 %in% c("7_1", "3_1", "9")] <- "Dendritic_cell"
+myeloid$annotations_level2_readable[myeloid$sub.cluster.3 %in% c("6", "4")] <- "Monocyte"
+myeloid$annotations_level2_readable[myeloid$sub.cluster.3 == "8"] <- "Neutrophil"
+```
+
+```{r}
+myeloid$annotations_level2_readable <- factor(myeloid$annotations_level2_readable,
+  levels = names(sort(table(myeloid$annotations_level2_readable), decreasing = T)))
+myeloid$annotations_level2 <- mapvalues(myeloid$annotations_level2_readable,
+  from = names(sort(table(myeloid$annotations_level2_readable), decreasing = T)),
+  to   = paste0("Mc", 1:length(unique(myeloid$annotations_level2_readable))))
+myeloid$annotations_level2 <- factor(myeloid$annotations_level2, levels = sort(unique(myeloid$annotations_level2)))
+
+myeloid$annotations_level3_readable <- factor(myeloid$annotations_level3_readable,
+  levels = names(sort(table(myeloid$annotations_level3_readable), decreasing = T)))
+myeloid$annotations_level3 <- mapvalues(myeloid$annotations_level3_readable,
+  from = names(sort(table(myeloid$annotations_level3_readable), decreasing = T)),
+  to   = paste0("Mc", sprintf("%02d", 1:length(unique(myeloid$annotations_level3_readable)))))
+myeloid$annotations_level3 <- factor(myeloid$annotations_level3, levels = sort(unique(myeloid$annotations_level3)))
+
+DimPlot(myeloid, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(myeloid, reduction = "umap", group.by = "annotations_level3_readable", cols = "polychrome", raster = F) + coord_equal()
+Idents(myeloid) <- "annotations_level2_readable"
+FAM(myeloid, "myeloid_annotations_level2_readable", output_path = output_path)
+Idents(myeloid) <- "annotations_level3_readable"
+FAM(myeloid, "myeloid_annotations_level3_readable", output_path = output_path)
+```
+
+# Save
+
+```{r}
+saveRDS(myeloid, paste0(output_path, "myeloid.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_06.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_06.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

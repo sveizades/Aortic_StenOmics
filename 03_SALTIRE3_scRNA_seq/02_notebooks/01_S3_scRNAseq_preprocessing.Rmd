@@ -1,0 +1,244 @@
+---
+title: "01: SALTIRE3 scRNA-seq Preprocessing"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to load SALTIRE3 scRNA-seq data (5' GEX with cell hashing or OCM multiplexing), assign QC metrics, and export a preprocessed Seurat object for downstream clustering.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(scDblFinder)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(scCustomize)
+library(readxl)
+library(plotly)
+library(rjson)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/01_S3_scRNAseq_preprocessing/"
+if(!dir.exists(output_path)) dir.create(output_path)
+cellbender_path <- "../01_data/cellbender_output/"
+cellrangermultiplexing_path <- "../01_data/cellrangermultiplexing_output/"
+
+# Functions
+source("../../utils.R")
+```
+
+# Download and read in data
+
+## Read in sample metadata
+
+```{r}
+library_info <- as.data.frame(read_excel("../../00_study_design/library_info.xlsx"))
+sample_hashing <- as.data.frame(read_excel("../../00_study_design/sample_hashing.xlsx"))
+
+# Build file lists for rsync: CellBender h5 outputs, multiplexing CSVs, and OCM JSONs
+sample_list <- paste0(library_info$pool_id[(library_info$included == "yes" & library_info$cohort == "UoE" & library_info$assay == "scC5pV2") | (library_info$included == "yes" & library_info$cohort == "UoE" & library_info$assay == "scC5pV3OCM")], "/cellbender_output_filtered.h5")
+write.table(sample_list, file = paste0(output_path, "cellbender_file_list.txt"), quote = F, row.names = F, col.names = F)
+sample_list <- paste0(library_info$pool_id[(library_info$included == "yes" & library_info$cohort == "UoE" & library_info$assay == "scC5pV2") | (library_info$included == "yes" & library_info$cohort == "UoE" & library_info$assay == "scC5pV3OCM")], "/outs/multi/multiplexing_analysis/assignment_confidence_table.csv")
+write.table(sample_list, file = paste0(output_path, "cellrangermultiplexing_file_list.txt"), quote = F, row.names = F, col.names = F)
+# OCM pools supply cells_per_tag.json instead of an assignment CSV
+sample_list <- paste0(library_info$pool_id[library_info$included == "yes" & library_info$cohort == "UoE" & library_info$assay == "scC5pV3OCM"], "/outs/multi/multiplexing_analysis/cells_per_tag.json")
+write.table(sample_list, file = paste0(output_path, "cellrangerOCM_file_list.txt"), quote = F, row.names = F, col.names = F)
+```
+
+```{bash}
+source ~/.bashrc
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/01_S3_scRNAseq_preprocessing/cellbender_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/03-CellBender/ \
+  ../01_data/cellbender_output
+
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/01_S3_scRNAseq_preprocessing/cellrangermultiplexing_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/02-CellRanger/ \
+  ../01_data/cellrangermultiplexing_output
+
+rsync -av -e "ssh -p 22 -i ~/.ssh/id_coconut -o IdentitiesOnly=yes" \
+  --files-from=../03_output/01_S3_scRNAseq_preprocessing/cellrangerOCM_file_list.txt \
+  coconut:"$COCONUT_CUREAS_PATH"Results/02-scnRNA-seq_Processing/02-CellRanger/ \
+  ../01_data/cellrangerOCM_output
+```
+
+## Read in CellBender and multiplexing output
+
+```{r}
+# Iterate through included samples (exclude CureAS_MH and CureAS_PR which are processed separately)
+obj_list <- list()
+for(i in rownames(library_info)[(library_info$assay == "scC5pV2" &
+                               library_info$included == "yes" &
+                               library_info$cohort == "UoE" &
+                               library_info$pool_id != "CureAS_MH" &
+                               library_info$pool_id != "CureAS_PR") |
+                               (library_info$assay == "scC5pV3OCM" &
+                               library_info$included == "yes" &
+                               library_info$cohort == "UoE" &
+                               library_info$pool_id != "CureAS_MH" &
+                               library_info$pool_id != "CureAS_PR")]){
+  # Read ambient-RNA-corrected count matrix from CellBender
+  matrix <- Read_CellBender_h5_Mat(paste0(cellbender_path, library_info[i,"pool_id"], "/cellbender_output_filtered.h5"))
+  obj_list[[length(obj_list)+1]] <- CreateSeuratObject(counts = matrix, project = library_info[i,"pool_id"])
+  # All cells are singlets at this stage (multiplexing doublets identified below)
+  obj_list[[length(obj_list)]]$status <- rep("singlet", length(colnames(obj_list[[length(obj_list)]])))
+  obj_list[[length(obj_list)]]$assignment <- rep("not_pooled", length(colnames(obj_list[[length(obj_list)]])))
+  # Store barcode before prefixing with pool_id so it can be matched to loom files later
+  obj_list[[length(obj_list)]]$cell_barcode <- colnames(obj_list[[length(obj_list)]])
+  obj_list[[length(obj_list)]]$pool_id <- obj_list[[length(obj_list)]]$orig.ident
+
+  if(library_info[i,"assay"] == "scC5pV2"){
+    # scC5pV2 pools use Cell Ranger Multiplexing with hashtag oligos; read the
+    # assignment confidence table and map hashtag IDs to sample/donor IDs
+    multiplexing_output <- read.csv(paste0(cellrangermultiplexing_path, library_info[i,"pool_id"],"/outs/multi/multiplexing_analysis/assignment_confidence_table.csv"))
+    rownames(multiplexing_output) <- multiplexing_output$Barcode
+    obj_list[[length(obj_list)]]@meta.data[,colnames(multiplexing_output)] <- ""
+    shared_cells <- multiplexing_output$Barcode[multiplexing_output$Barcode %in% colnames(obj_list[[length(obj_list)]])]
+    obj_list[[length(obj_list)]]@meta.data[shared_cells,colnames(multiplexing_output)] <- multiplexing_output[shared_cells,]
+    obj_list[[length(obj_list)]]$donor_id <- rep(unique(sample_hashing$donor[sample_hashing$pool_id == library_info[i,"pool_id"]]), length(colnames(obj_list[[length(obj_list)]])))
+    obj_list[[length(obj_list)]]$sample_id <- mapvalues(obj_list[[length(obj_list)]]$Assignment, from = c(sample_hashing$hashtag_ids[sample_hashing$pool_id == library_info[i,"pool_id"]],"Multiplet","Unassigned","Blank"), to = c(sample_hashing$sample_id[sample_hashing$pool_id == library_info[i,"pool_id"]],"Multiplet","Unassigned","Blank"))
+  } else if(library_info[i,"assay"] == "scC5pV3OCM"){
+    # scC5pV3OCM pools use On-Chip Multiplexing; Cell Ranger outputs per-tag barcode
+    # lists as a JSON file rather than a per-cell assignment table
+    ocmjson <- fromJSON(file = paste0("../01_data/cellrangerOCM_output/", library_info[i,"pool_id"], "/outs/multi/multiplexing_analysis/cells_per_tag.json"))
+    for(b in sample_hashing$hashtag_ids[sample_hashing$pool_id == library_info[i,"pool_id"]]){
+      ocm_barcodes <- ocmjson[[b]]
+      shared_cells <- ocm_barcodes[ocm_barcodes %in% colnames(obj_list[[length(obj_list)]])]
+      obj_list[[length(obj_list)]]@meta.data[shared_cells,"Assignment"] <- b
+      obj_list[[length(obj_list)]]@meta.data[shared_cells,"sample_id"] <- sample_hashing$sample_id[sample_hashing$pool_id == library_info[i,"pool_id"] & sample_hashing$hashtag_ids == b]
+      obj_list[[length(obj_list)]]@meta.data[shared_cells,"donor_id"] <- sample_hashing$donor[sample_hashing$pool_id == library_info[i,"pool_id"] & sample_hashing$hashtag_ids == b]
+    }
+  }
+  # Prefix cell barcodes with pool_id to ensure globally unique cell names
+  obj_list[[length(obj_list)]] <- RenameCells(obj_list[[length(obj_list)]], add.cell.id = library_info[i,"pool_id"])
+}
+
+# Merge all pools into a single object; JoinLayers collapses the per-pool count layers
+# created during merge (Seurat v5 behaviour)
+atlas <- merge(obj_list[[1]], c(obj_list[2:length(obj_list)]))
+atlas <- JoinLayers(atlas)
+```
+
+## Split hashing assay from RNA
+
+```{r}
+# Hashtag oligo features are stored alongside gene counts; separate them into a
+# dedicated assay to prevent them from influencing downstream clustering
+atlas[["Hashing"]] <- CreateAssayObject(counts = atlas@assays$RNA$counts[paste0("Hashtag.", 1:8),])
+atlas[["RNA"]] <- CreateAssayObject(counts = atlas@assays$RNA$counts[setdiff(rownames(atlas),paste0("Hashtag.", 1:8)),])
+```
+
+# QC metrics and base filtering
+
+## Add QC metrics
+
+```{r}
+atlas <- Add_Cell_QC_Metrics(object = atlas, species = "human")
+QC_Plots_Genes(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_UMIs(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_Mito(seurat_object = atlas, pt.size = 0, raster = F)
+QC_Plots_Complexity(seurat_object = atlas, pt.size = 0, raster = F)
+```
+
+## Interactively evaluate distribution of quality metrics
+
+```{r}
+plot_ly(x = atlas$nCount_RNA, type = "histogram")
+plot_ly(x = atlas$nFeature_RNA, type = "histogram")
+plot_ly(x = atlas$percent_mito, type = "histogram")
+plot_ly(x = atlas$percent_ribo, type = "histogram")
+plot_ly(x = atlas$log10GenesPerUMI, type = "histogram")
+```
+
+## Calculate MAD-based outlier thresholds for QC metrics
+
+```{r}
+# Compute 3-MAD and 5-MAD thresholds to guide cut-off selection
+attr(isOutlier(atlas$nCount_RNA, nmads = 3, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$nFeature_RNA, nmads = 3, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$percent_mito, nmads = 3, type = "higher", log = F),"thresholds")
+attr(isOutlier(atlas$nCount_RNA, nmads = 5, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$nFeature_RNA, nmads = 5, type = "lower", log = T),"thresholds")
+attr(isOutlier(atlas$percent_mito, nmads = 5, type = "higher", log = F),"thresholds")
+```
+
+## Visualise cut offs
+
+```{r}
+# all values manually resolved form histogram as the calculated MAD threshold are very low
+QC_Histogram(seurat_object = atlas, features = "nCount_RNA", low_cutoff = 500)
+QC_Histogram(seurat_object = atlas, features = "nFeature_RNA", low_cutoff = 350)
+QC_Histogram(seurat_object = atlas, features = "percent_mito", high_cutoff = 15)
+```
+
+```{r}
+QC_Plot_UMIvsGene(seurat_object = atlas, low_cutoff_gene = 350, low_cutoff_UMI = 500, raster = F)
+QC_Plot_GenevsFeature(seurat_object = atlas, feature1 = "percent_mito", low_cutoff_gene = 350, high_cutoff_feature = 15, raster = F)
+```
+
+## Remove QC outliers
+
+```{r}
+atlas$nCount_RNA_outlier <- atlas$nCount_RNA < 500
+atlas$nFeature_RNA_outlier <- atlas$nFeature_RNA < 350
+atlas$percent.mt_outlier <- atlas$percent_mito > 15
+# Save unfiltered object before subsetting so QC decisions can be audited
+saveRDS(atlas, file = paste0(output_path, "SALTIRE3cellatlas_unprocessed.rds"))
+dim(atlas)
+atlas <- subset(atlas, subset = nCount_RNA_outlier == FALSE & nFeature_RNA_outlier == FALSE & percent.mt_outlier == FALSE)
+dim(atlas)
+```
+
+```{r}
+VlnPlot(atlas, features = c("nFeature_RNA", "nCount_RNA", "percent_mito"), ncol = 3, log = T, pt.size = 0, raster = F) & theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + NoLegend()
+VlnPlot(atlas, features = c("nFeature_RNA", "nCount_RNA", "percent_mito"), ncol = 3, log = F, pt.size = 0, raster = F) & theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + NoLegend()
+QC_Plot_UMIvsGene(seurat_object = atlas, raster = F)
+QC_Plot_GenevsFeature(seurat_object = atlas, feature1 = "percent_mito", raster = F)
+```
+
+```{r}
+saveRDS(atlas, file = paste0(output_path, "SALTIRE3cellatlas_preprocessed.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_01.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_01.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

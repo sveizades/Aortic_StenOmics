@@ -1,0 +1,135 @@
+---
+title: "03: SALTIRE3 FAPI follow-up"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to analyse FAPI follow up data
+
+## Load packages
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(broom)
+library(mediation)
+library(ggpubr)
+source("../../utils.R")
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/03_FAPI_follow_up/"
+if(!dir.exists(output_path)) dir.create(output_path)
+```
+
+```{r}
+follow_up <- read.csv('../01_data/AorticStenomics_FollowUp_Data.csv')
+follow_up$log_CT_diff <- log1p(abs(follow_up$CTCalciumScore_Annualised_difference)) *
+  sign(follow_up$CTCalciumScore_Annualised_difference)
+```
+
+
+```{r}
+TBRmax_CTcalc <- cor.test(follow_up$Baseline_TBRmax,
+               follow_up$log_CT_diff,
+               method = "pearson")
+jet_CTcalc <- cor.test(follow_up$AnnualisedVmaxDifference,
+               follow_up$log_CT_diff,
+               method = "pearson")
+TBRmax_jet <- cor.test(follow_up$Baseline_TBRmax,
+               follow_up$AnnualisedVmaxDifference,
+               method = "pearson")
+```
+
+```{r}
+write.csv(tidy(TBRmax_CTcalc), file = paste0(output_path, "TBRmax_CTcalc_correlation.csv"))
+write.csv(tidy(jet_CTcalc), file = paste0(output_path, "jet_CTcalc_correlation.csv"))
+write.csv(tidy(TBRmax_jet), file = paste0(output_path, "TBRmax_jet_correlation.csv"))
+```
+
+
+```{r}
+model.M <- lm(log_CT_diff ~ Baseline_TBRmax, data = follow_up)
+model.Y <- lm(AnnualisedVmaxDifference ~ Baseline_TBRmax + log_CT_diff, data = follow_up)
+set.seed(42)
+med.out <- mediate(model.M, model.Y, 
+                   treat = "Baseline_TBRmax", 
+                   mediator = "log_CT_diff",
+                   boot = TRUE, sims = 5000)
+write.csv(tidy(model.M), file = paste0(output_path, "logCTdiff_TBRmax_lm.csv"))
+write.csv(tidy(model.Y), file = paste0(output_path, "jet_TBRmax_and_logCTdiff.csv"))
+write.csv(tidy(med.out), file = paste0(output_path, "mediation.csv"))
+```
+```{r}
+follow_up$follow_up_months <- follow_up$Days.elapsed / 30.44
+
+ggplot(follow_up, aes(x=follow_up_months)) + 
+  geom_histogram(
+    binwidth = 1,
+    fill = "grey70",
+    colour = "black",
+    linewidth = 0.3
+  )+ geom_vline(
+    xintercept = median(follow_up$follow_up_months, na.rm = TRUE),
+    linetype = "dashed",
+    linewidth = 0.5
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0))) +
+  theme_pubr() +
+  theme(
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.background   = element_blank(),
+    plot.background    = element_blank(),
+    axis.title.y       = element_blank(),
+    axis.title.x       = element_blank(),
+    axis.text.x        = element_text(colour = "black", size = 5),
+    axis.text.y        = element_text(colour = "black", size = 5,
+                                      margin = margin(r = 1)),
+    axis.line          = element_line(colour = "black"),
+    strip.background   = element_blank(),
+    strip.text         = element_blank(),
+    plot.title         = element_blank(),
+    plot.margin        = unit(c(1, 1, 1, 1), "mm"),
+    legend.position    = "none",
+    axis.ticks         = element_blank()
+  )
+```
+
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path,
+                          "../01_data/output_checksums_03.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path,
+                          "../01_data/output_checksums_03.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```
+

@@ -1,0 +1,15 @@
+cell_type	microenvironment
+VIC-transitional	Cap
+VIC-contractile	Cap
+VIC-spongiosa	Spongiosa
+VIC-quiescent	Spongiosa
+VIC-neural-crest	Spongiosa
+VIC-IFN	Spongiosa
+VIC-FAP-osteogenic	Peri-nodular
+Macrophage	Peri-nodular
+NK	Immune
+T-CD4	Immune
+T-CD8	Immune
+B cell	Immune
+T-gd	Immune
+Plasma cell	Immune

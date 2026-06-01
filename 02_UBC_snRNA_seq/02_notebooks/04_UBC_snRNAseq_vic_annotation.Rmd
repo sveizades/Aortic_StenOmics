@@ -1,0 +1,332 @@
+---
+title: "04: UBC snRNA-seq VIC Annotation"
+author: "Stefan Veizades"
+license: "MIT"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to annotate the valvular interstitial cell (VIC) cluster. VICs are the predominant stromal cell type of the aortic valve.
+
+## Load packages
+
+```{r}
+library(Seurat)
+library(dittoSeq)
+library(scico)
+library(ggplot2)
+library(DropletUtils)
+library(plyr)
+library(harmony)
+library(dplyr)
+library(scuttle)
+library(maditr)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(biomaRt)
+library(openxlsx)
+library(SeuratDisk)
+library(tidyr)
+library(limma)
+library(tibble)
+library(speckle)
+```
+
+## Parameters
+
+```{r}
+# Paths
+output_path <- "../03_output/04_UBC_snRNAseq_vic_annotation/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+## Read in data
+
+```{r}
+vics <- readRDS(file = "../03_output/03_UBC_snRNAseq_atlas_rough_annotation/vics.rds")
+```
+
+# Initial clustering and QC
+
+```{r}
+# Use SelectIntegrationFeatures to select variable genes that are consistent
+# across donors, reducing donor batch effects in the embedding
+vics <- harmony_cluster(vics, dims = 1:50, use_integration_features = TRUE)
+plot_cluster_umaps(vics)
+```
+
+```{r}
+# Inspect QC metrics per cluster to identify low-quality or doublet clusters
+plot_qc_by_cluster(vics, "RNA_snn_res.0.4")
+```
+
+```{r}
+Idents(vics) <- "RNA_snn_res.0.4"
+FAM(vics, "preqc_vics_0.4", output_path = output_path)
+```
+
+## QC filtering
+
+RNA_snn_res.0.3 cluster 3 is very low quality; RNA_snn_res.0.3 cluster 8 is a doublet cluster; RNA_snn_res.0.4 cluster 4 has a very high percent of mitochondrial reads.
+
+```{r}
+dim(vics)
+vics <- subset(vics, RNA_snn_res.0.4 != "4" & RNA_snn_res.0.4 != "5" & known_doublet == F & RNA_snn_res.0.4 != "10")
+dim(vics)
+```
+
+# Re-cluster after filtering
+
+```{r}
+vics <- harmony_cluster(vics, dims = 1:50, use_integration_features = TRUE)
+plot_cluster_umaps(vics)
+```
+
+```{r}
+# Confirm QC metrics are clean after filtering
+plot_qc_by_cluster(vics, "RNA_snn_res.0.3", show_doublets = FALSE)
+```
+
+# Annotation
+
+```{r}
+# Assign sequential cluster labels prefixed with "VICn" using resolution 0.3
+vics$annotations_level2 <- as.numeric(vics$RNA_snn_res.0.3)
+vics$annotations_level2[vics$RNA_snn_res.0.4 == "7"] <- 6
+
+vics$annotations_level2 <- paste0("VICn", vics$annotations_level2)
+vics$annotations_level2 <- factor(vics$annotations_level2, levels = sort(unique(vics$annotations_level2)))
+vics$annotations_level2_readable <- mapvalues(vics$annotations_level2, from = c("VICn1", "VICn2", "VICn3", "VICn4", "VICn5", "VICn6", "VICn7"), to = c("Transitional", "Spongiosa", "FAP+ osteogenic", "Quiescent", "Contractile", "Neural crest-like", "IFN-stimulated"))
+vics$annotations_level2_readable <- factor(vics$annotations_level2_readable, levels = rev(c("Transitional", "Quiescent", "Spongiosa", "FAP+ osteogenic", "Contractile", "Neural crest-like", "IFN-stimulated")))
+DimPlot(vics, reduction = "umap", group.by = "annotations_level2", cols = "polychrome", raster = F) + coord_equal()
+DimPlot(vics, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+Idents(vics) <- "annotations_level2"
+FAM(vics, "vics_annotations_level2", output_path = output_path)
+Idents(vics) <- "annotations_level2_readable"
+FAM(vics, "vics_annotations_level2_readable", output_path = output_path)
+```
+
+```{r}
+### VIC Proportions Statistical Testing - Save Results for All Cell Types
+
+# Step 1: Calculate proportions per sample for ALL cell types
+proportions_df_all <- vics@meta.data %>%
+  group_by(donor_id, clinical_classification, annotations_level2_readable) %>%
+  summarise(n_cells = n(), .groups = "drop_last") %>%
+  mutate(total_cells = sum(n_cells),
+         proportion = n_cells / total_cells * 100) %>%  # Convert to percent
+  ungroup()
+
+# Step 2: Ensure all samples are present for all cell types (even if proportion = 0)
+all_samples <- vics@meta.data %>%
+  distinct(donor_id, clinical_classification)
+
+all_celltypes <- unique(vics@meta.data$annotations_level2_readable)
+
+# Create complete combination of samples and cell types
+complete_combinations <- expand.grid(
+  donor_id = all_samples$donor_id,
+  annotations_level2_readable = all_celltypes,
+  stringsAsFactors = FALSE
+) %>%
+  left_join(all_samples, by = "donor_id")
+
+proportions_df_complete <- complete_combinations %>%
+  left_join(proportions_df_all, by = c("donor_id", "clinical_classification", "annotations_level2_readable")) %>%
+  mutate(proportion = replace_na(proportion, 0),
+         n_cells = replace_na(n_cells, 0)) %>%
+  dplyr::select(donor_id, clinical_classification, annotations_level2_readable, n_cells, total_cells, proportion)
+
+# Step 3: Run statistical test
+# Generate transformed proportions
+props <- getTransformedProps(
+  clusters = vics$annotations_level2_readable,
+  sample = vics$donor_id,
+  transform = "logit"
+)
+
+# Create sample info
+sample_order <- colnames(props$TransformedProps)
+sample_info <- vics@meta.data %>%
+  distinct(donor_id, clinical_classification) %>%
+  filter(donor_id %in% sample_order) %>%
+  mutate(clinical_classification = factor(clinical_classification, levels = c("control", "mildmoderate", "severe")),
+         dose = as.numeric(clinical_classification)) %>%
+  arrange(factor(donor_id, levels = sample_order))
+
+# Design matrix and fit
+design <- model.matrix(~ dose, data = sample_info)
+fit <- lmFit(props$TransformedProps, design)
+fit <- eBayes(fit, robust = TRUE)
+
+# Step 4: Extract p-values for ALL cell types
+topTable_results_all <- topTable(fit, coef = "dose", number = Inf) %>%
+  rownames_to_column("celltype") %>%
+  arrange(adj.P.Val)
+
+# Step 5: Save results to CSV
+write.csv(topTable_results_all, 
+          file = paste0(output_path, "VIC_proportions_statistics.csv"), 
+          row.names = FALSE)
+
+# Also save the proportions data
+write.csv(proportions_df_complete, 
+          file = paste0(output_path, "VIC_proportions_data.csv"), 
+          row.names = FALSE)
+
+# Print summary
+cat("Statistical results saved for", nrow(topTable_results_all), "cell types\n")
+cat("Significant cell types (adj.P.Val < 0.05):\n")
+print(topTable_results_all %>% filter(adj.P.Val < 0.05) %>% dplyr::select(celltype, logFC, adj.P.Val))
+```
+
+```{r}
+design <- model.matrix(~0 + clinical_classification, data = sample_info)
+colnames(design) <- levels(sample_info$clinical_classification)
+
+contrast_matrix <- makeContrasts(
+  severe_specific = severe - (control + mildmoderate)/2,
+  levels = design
+)
+
+
+fit <- lmFit(props$TransformedProps, design)
+fit <- contrasts.fit(fit, contrast_matrix)
+fit <- eBayes(fit, robust = TRUE)
+severe_results <- topTable(fit, coef = "severe_specific", number = Inf) %>%
+  rownames_to_column("celltype") %>%
+  arrange(adj.P.Val)
+write.csv(severe_results, 
+          file = paste0(output_path, "VIC_proportions_severe_statistics.csv"), 
+          row.names = FALSE)
+```
+
+# Pathway analysis
+
+```{r}
+universe <- rownames(vics)
+DE_vics_annotations_level2 <- read.csv(paste0(output_path, "vics_annotations_level2_readable_degs.csv"), row.names = 1)
+
+# Run GO biological process enrichment for each VIC subcluster and write to
+# a multi-sheet workbook (one sheet per cluster)
+wb <- createWorkbook()
+for(i in unique(DE_vics_annotations_level2$cluster)){
+  ego <- enrichGO(
+    gene      = DE_vics_annotations_level2$gene[DE_vics_annotations_level2$cluster == i & DE_vics_annotations_level2$sig == "yes"],
+    universe  = universe,
+    OrgDb     = org.Hs.eg.db,
+    keyType   = "SYMBOL",
+    ont       = "BP",
+    pvalueCutoff = 0.05,
+    readable  = TRUE
+  )
+  addWorksheet(wb, i)
+  writeData(wb, i, ego@result)
+}
+saveWorkbook(wb, file = paste0(output_path, "pathways_vics_annotations_level2_readable.xlsx"), overwrite = TRUE)
+```
+
+```{r}
+emb <- Embeddings(vics, "umap")
+emb[, "umap_1"] <- -emb[, "umap_1"]
+emb[, "umap_2"] <- -emb[, "umap_2"]
+
+vics[["umap"]]@cell.embeddings <- emb
+
+DimPlot(vics, reduction = "umap", group.by = "annotations_level2_readable", cols = "polychrome", raster = F) + coord_equal()
+```
+
+# Export
+
+```{r}
+# Convert Seurat v5 Assay5 to legacy Assay for h5ad compatibility
+vics_export <- vics
+vics_export[["RNA3"]] <- as(object = vics_export[["RNA"]], Class = "Assay")
+DefaultAssay(vics_export) <- "RNA3"
+vics_export[["RNA"]] <- NULL
+vics_export <- RenameAssays(object = vics_export, RNA3 = 'RNA')
+anndataR::write_h5ad(vics_export, paste0(output_path, "vics.h5ad"), mode = "w")
+```
+
+
+```{r}
+saveRDS(object = vics, file = paste0(output_path, "vics.rds"))
+```
+
+# MAGIC imputation
+
+```{r}
+# Write variable-gene count matrix for MAGIC imputation (run in Python)
+magic_genes <- VariableFeatures(vics)
+write10xCounts(
+  path     = paste0(output_path, "vic_magic_input"),
+  x        = vics@assays$RNA@layers$counts[which(rownames(vics) %in% magic_genes), ],
+  barcodes = colnames(vics),
+  gene.id  = rownames(vics)[which(rownames(vics) %in% magic_genes)],
+  overwrite = T
+)
+```
+
+```{r}
+# Set up reticulate to use MAGIC mamba environment
+library(reticulate)
+use_condaenv("MAGIC", required = TRUE)
+```
+
+```{python}
+# Run MAGIC on VIC object
+import magic
+import scprep
+import numpy as np
+import pandas as pd
+
+vicnuc_data = scprep.io.load_10X("../03_output/04_UBC_snRNAseq_vic_annotation/vic_magic_input")
+vicnuc_data = scprep.normalize.library_size_normalize(vicnuc_data)
+vicnuc_data = scprep.transform.sqrt(vicnuc_data)
+magic_operator = magic.MAGIC(random_state=42)
+vicnuc_magic = magic_operator.fit_transform(vicnuc_data)
+vicnuc_magic.to_csv("../03_output/04_UBC_snRNAseq_vic_annotation/vic_magic_output.csv")
+```
+
+```{r}
+# Load MAGIC-imputed matrix and store as a separate assay for downstream use
+vics_magic <- read.csv(paste0(output_path, "vic_magic_output.csv"), row.names = 1)
+vics[["MAGIC"]] <- CreateAssayObject(data = t(vics_magic))
+rm(vics_magic)
+```
+
+```{r}
+saveRDS(object = vics, file = paste0(output_path, "vics_magic.rds"))
+```
+
+# --- Run once to generate reference checksums ---
+
+```{r, eval=FALSE}
+generate_output_checksums(output_path, 
+                          "../01_data/output_checksums_04.csv")
+```
+
+# --- Run on every subsequent execution ---
+
+```{r, message=TRUE}
+validate_output_checksums(output_path, 
+                          "../01_data/output_checksums_04.csv")
+```
+
+```{r}
+sessioninfo::session_info(info = "packages")
+```

@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-24T16:57:25.720278",
+    "czi_path": "/Users/stefan/UoE/Slide_Scanning/E241208D_ASOmics-HE-1/E241208D_B4TPY-A25_PX3J.czi",
+    "original_shape": [
+      68109,
+      96621,
+      3
+    ],
+    "pixel_size_um": 0.21957577959382474,
+    "stage": 1
+  },
+  "parameters": {
+    "rotation": -69.0,
+    "broad_crop_bbox": [
+      10557,
+      10856,
+      80201,
+      106950
+    ]
+  },
+  "output": {
+    "npy_path": "/Users/stefan/UoE/AorticStenOmics/Aortic_StenOmics/99_figures/01_data/microscopy/Figure_1c_mildmoderate_stage1.npy",
+    "aligned_shape": [
+      96094,
+      69644,
+      3
+    ]
+  }
+}

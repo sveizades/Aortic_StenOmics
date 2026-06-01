@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-26T17:37:22.659433",
+    "stage1_npy": "/Users/stefan/UoE/Dump/260204_plotting_images/F101-mildmoderate-stage1_stage1.npy",
+    "stage1_params": "/Users/stefan/UoE/Dump/260204_plotting_images/F101-mildmoderate-stage1_stage1_params.json",
+    "pixel_size_um": 0.21957577959382474,
+    "stage": 2
+  },
+  "parameters": {
+    "roi_bbox": [
+      2609,
+      27714,
+      68281,
+      39197
+    ],
+    "zoom_bbox": [
+      29125,
+      32248,
+      33432,
+      35816
+    ],
+    "contrast_min": 0.0,
+    "contrast_max": 201.9463087248322,
+    "scalebar_um": 2000.0,
+    "zoom_scalebar_um": 200.0,
+    "figure_width_cm": 7.5
+  }
+}

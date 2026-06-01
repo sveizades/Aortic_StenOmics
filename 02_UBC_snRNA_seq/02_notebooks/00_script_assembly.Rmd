@@ -1,0 +1,71 @@
+---
+title: "00: UBC snRNA-seq Script Assemby"
+author: "Stefan Veizades"
+license: "MIT"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message=FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+# Introduction
+
+The objective of this notebook is to generate bash scripts for cellranger, cellbender (ambient RNA correction), and souporcell (SNP demultiplexing) of snRNA-seq data generated using 10X Genomic's Chromium.
+
+## Load packages
+```{r}
+library(dplyr)
+library(readxl)
+library(plyr)
+```
+
+## Parameters
+
+```{r}
+# Paths
+fastq_ids <- as.data.frame(read_excel("../../00_study_design/fastq_ids.xlsx"))
+library_info <- as.data.frame(read_excel("../../00_study_design/library_info.xlsx"))
+output_path <- "../03_output/00_script_assembly/"
+if(!dir.exists(output_path)) dir.create(output_path)
+
+# Functions
+source("../../utils.R")
+```
+
+# Write scripts
+
+```{r}
+script_submission <- ""
+for(i in rownames(library_info)[library_info$cohort == "UBC"]){
+  sample_table <- "empty"
+  if(library_info[i,"cellranger"] == "yes"){
+    cellranger_count(fastq_line = paste0(fastq_ids[fastq_ids$pool_id == library_info[i,"pool_id"] & fastq_ids$library_type == "GEX", "fastq_id"], collapse = ","),
+                       pool_id = library_info[i,"pool_id"],
+                       output_path = output_path)
+    script_submission <- paste0(script_submission, "qsub ", library_info[i,"pool_id"], "_1-cellranger_script.sh\n")
+  }
+  if(library_info[i,"cellbender"] == "yes"){
+    cellbender(assay = library_info[i,"assay"],
+               sample_table = sample_table,
+               pool_id = library_info[i,"pool_id"],
+               output_path = output_path)
+    script_submission <- paste0(script_submission, "qsub ", library_info[i,"pool_id"], "_2-cellbender_script.sh\n")
+  }
+  if(library_info[i,"souporcell"] == "yes"){
+    souporcell(assay = library_info[i,"assay"],
+               pool_id = library_info[i,"pool_id"],
+               n_pool = library_info[i,"n_pool"],
+               output_path = output_path)
+    script_submission <- paste0(script_submission, "qsub ", library_info[i,"pool_id"], "_3-souporcell_script.sh\n")
+  }
+}
+writeLines(script_submission, paste0(output_path,"script_submission.txt"))
+```
+
